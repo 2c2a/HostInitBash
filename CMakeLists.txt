@@ -20,6 +20,7 @@ add_executable(h_side_init
     src/main.cpp
     src/h_side_init.cpp
     admin_resource.rc
+    admin_manifest.xml
 )
 
 target_link_libraries(h_side_init PRIVATE
@@ -32,5 +33,3 @@ target_link_libraries(h_side_init PRIVATE
 target_include_directories(h_side_init PRIVATE src)
 
 set_property(TARGET h_side_init PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
-
-set_target_properties(h_side_init PROPERTIES LINK_FLAGS "/MANIFEST:NO")
