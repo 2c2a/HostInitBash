@@ -32,3 +32,5 @@ target_link_libraries(h_side_init PRIVATE
 target_include_directories(h_side_init PRIVATE src)
 
 set_property(TARGET h_side_init PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+
+set_target_properties(h_side_init PROPERTIES LINK_FLAGS "/MANIFEST:NO")
