@@ -193,7 +193,7 @@ HttpResponse http_post(const std::string& url, const std::string& auth_token) {
     }
 
     DWORD flags = (use_https ? INTERNET_FLAG_SECURE : 0) |
-                  INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_PRAGMA_NO_CACHE;
+                  INTERNET_FLAG_NO_CACHE_WRITE | 0x00000100;
 
     HINTERNET h_request = HttpOpenRequestA(h_connect, "POST", url_path,
                                            nullptr, nullptr, nullptr, flags, 0);
