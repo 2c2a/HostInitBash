@@ -9,7 +9,6 @@ cmake-build-*/
 *.exp
 *.dll
 h_side_config.json
-app_icon.ico
 .vs/
 out/
 CMakeUserPresets.json
