@@ -7,7 +7,6 @@ on:
   pull_request:
     branches: [ main, master ]
 
-# Top-level permissions: ensure contents (releases) can be created/modified
 permissions:
   contents: write
   packages: write
@@ -19,52 +18,29 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.10.11'
-
     - name: Download Icon
       run: |
-        # 下载图标文件
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/trustedinster/ZASCA/refs/heads/master/static/img/favicon.ico" -OutFile "app_icon.ico"
-        echo "图标已下载到 app_icon.ico"
+        echo "Icon downloaded to app_icon.ico"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install nuitka requests
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-    - name: Build executable with Nuitka
-      run: |
-        python -m nuitka `
-          --standalone `
-          --onefile `
-          --assume-yes-for-downloads `
-          --windows-file-description="ZASCA主机端自动化部署程序" `
-          --windows-product-name="ZASCA H-Side" `
-          --windows-company-name="Supercmd" `
-          --windows-file-version=1.0.0 `
-          --windows-product-version=1.0.0 `
-          --windows-icon-from-ico=app_icon.ico `
-          --include-package=requests `
-          --windows-uac-admin `
-          --output-filename=h_side_init.exe h_side_init.py
+    - name: Build
+      run: cmake --build build --config Release
 
     - name: Upload artifact
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
       uses: actions/upload-artifact@v4
       with:
         name: h-side-init-executable
-        path: h_side_init.exe
+        path: build/Release/h_side_init.exe
 
   release:
     needs: build-exe
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
-    # (Optional) job-level permissions override (keeps least-privilege)
     permissions:
       contents: write
       packages: write
@@ -79,11 +55,9 @@ jobs:
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
-      # If you have a repository secret PAT called RELEASE_PUBLISH_TOKEN, swap the token below:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        # use the short tag name (e.g. "v1.2.3") instead of the full ref
         tag_name: ${{ github.ref_name }}
         release_name: Release ${{ github.ref_name }}
         draft: false

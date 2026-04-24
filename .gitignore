@@ -1,0 +1,15 @@
+build/
+cmake-build-*/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.dll
+h_side_config.json
+app_icon.ico
+.vs/
+out/
+CMakeUserPresets.json
