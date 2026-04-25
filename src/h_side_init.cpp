@@ -320,6 +320,7 @@ HSideInitializer::HSideInitializer(const std::string& secret) {
     expires_at_ = decoded.value("expires_at", "");
     hostname_ = get_hostname();
     ip_address_ = get_local_ip();
+    auto_register_ = decoded.value("auto_register", false);
 }
 
 std::string HSideInitializer::derive_totp_key() {
@@ -435,20 +436,435 @@ void HSideInitializer::save_session_token(const std::string& session_token) {
 
 std::string HSideInitializer::activate_with_totp() {
     std::string totp_code = generate_and_display_totp();
-    std::string session_token = exchange_token();
+    session_token_ = exchange_token();
 
     std::cout << std::string(60, '=') << "\n";
     std::cout << "ZASCA H\u7aef\u521d\u59cb\u5316\u5b8c\u6210\uff01\n";
-    std::cout << "\u2713 H\u7aef\u5df2\u6fc0\u6d3b\uff0c\u4f1a\u8bdd\u4ee4\u724c: " << session_token << "\n";
+    std::cout << "\u2713 H\u7aef\u5df2\u6fc0\u6d3b\uff0c\u4f1a\u8bdd\u4ee4\u724c: " << session_token_ << "\n";
     std::cout << "\u2713 H\u7aef\u73b0\u5728\u5904\u4e8eZeroAgent\u72b6\u6001\uff0c\u7b49\u5f85C\u7aef\u8fde\u63a5\n";
     std::cout << std::string(60, '=') << "\n";
 
-    return session_token;
+    return session_token_;
+}
+
+bool HSideInitializer::ask_tunnel_installation() {
+    std::cout << std::string(60, '=') << "\n";
+    std::cout << "\u662f\u5426\u9700\u8981\u5b89\u88c5ZASCA Tunnel\u7a7f\u900f\u670d\u52a1\uff1f\n";
+    std::cout << "Tunnel\u670d\u52a1\u53ef\u4ee5\u8ba9\u60a8\u7684\u4e3b\u673a\u5728\u6ca1\u6709\u516c\u7f51IP\u7684\u60c5\u51b5\u4e0b\u4e5f\u80fd\u88ab\u8fdc\u7a0b\u7ba1\u7406\u3002\n";
+    std::cout << "\u8f93\u5165 'y' \u6216 'yes' \u5b89\u88c5Tunnel\uff0c\u5176\u4ed6\u4efb\u610f\u952e\u8df3\u8fc7: ";
+    
+    std::string response;
+    std::getline(std::cin, response);
+    
+    std::transform(response.begin(), response.end(), response.begin(), ::tolower);
+    return (response == "y" || response == "yes");
+}
+
+bool HSideInitializer::download_tunnel_client(const std::string& arch) {
+    std::cout << "\u6b63\u5728\u4e0b\u8f7dTunnel\u5ba2\u6237\u7aef (" << arch << ")...\n";
+    
+    std::string url = c_side_url_ + "/tunnel/download/?arch=" + arch;
+    
+    URL_COMPONENTSA uc = {};
+    uc.dwStructSize = sizeof(uc);
+    
+    char scheme[16] = {};
+    char hostname[256] = {};
+    char url_path[2048] = {};
+    
+    uc.lpszScheme = scheme;
+    uc.dwSchemeLength = sizeof(scheme);
+    uc.lpszHostName = hostname;
+    uc.dwHostNameLength = sizeof(hostname);
+    uc.lpszUrlPath = url_path;
+    uc.dwUrlPathLength = sizeof(url_path);
+    
+    if (!InternetCrackUrlA(url.c_str(), 0, 0, &uc)) {
+        std::cerr << "\u2716 \u89e3\u6790URL\u5931\u8d25\n";
+        return false;
+    }
+    
+    bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
+    
+    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    if (!h_internet) {
+        std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD timeout = 60000;
+    InternetSetOptionA(h_internet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    InternetSetOptionA(h_internet, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
+    InternetSetOptionA(h_internet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+    
+    HINTERNET h_connect = InternetConnectA(h_internet, hostname, uc.nPort,
+                                           nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
+    if (!h_connect) {
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 InternetConnectA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD flags = (use_https ? INTERNET_FLAG_SECURE : 0) |
+                  INTERNET_FLAG_NO_CACHE_WRITE | 0x00000100;
+    
+    HINTERNET h_request = HttpOpenRequestA(h_connect, "GET", url_path,
+                                           nullptr, nullptr, nullptr, flags, 0);
+    if (!h_request) {
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpOpenRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    if (!HttpSendRequestA(h_request, nullptr, 0, nullptr, 0)) {
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpSendRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD status_code = 0;
+    DWORD status_code_len = sizeof(status_code);
+    HttpQueryInfoA(h_request, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                   &status_code, &status_code_len, nullptr);
+    
+    if (status_code != 200) {
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 \u4e0b\u8f7d\u5931\u8d25\uff0c\u72b6\u6001\u7801: " << status_code << "\n";
+        return false;
+    }
+    
+    std::string exe_path = "zasca-tunnel.exe";
+    std::ofstream out_file(exe_path, std::ios::binary);
+    
+    if (!out_file.is_open()) {
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 \u65e0\u6cd5\u521b\u5efa\u6587\u4ef6: " << exe_path << "\n";
+        return false;
+    }
+    
+    char buffer[8192];
+    DWORD bytes_read = 0;
+    size_t total_bytes = 0;
+    
+    while (InternetReadFile(h_request, buffer, sizeof(buffer), &bytes_read) && bytes_read > 0) {
+        out_file.write(buffer, bytes_read);
+        total_bytes += bytes_read;
+    }
+    
+    out_file.close();
+    InternetCloseHandle(h_request);
+    InternetCloseHandle(h_connect);
+    InternetCloseHandle(h_internet);
+    
+    std::cout << "\u2713 Tunnel\u5ba2\u6237\u7aef\u4e0b\u8f7d\u5b8c\u6210 (" << total_bytes << " \u5b57\u8282)\n";
+    return true;
+}
+
+bool HSideInitializer::install_tunnel_service(const std::string& tunnel_token, const std::string& gateway_url) {
+    std::cout << "\u6b63\u5728\u5b89\u88c5Tunnel\u670d\u52a1...\n";
+    
+    std::string config_content = "token: " + tunnel_token + "\nserver: " + gateway_url + "\n";
+    
+    std::string config_dir = "C:\\ProgramData\\ZASCA";
+    std::string config_path = config_dir + "\\tunnel.yaml";
+    
+    CreateDirectoryA(config_dir.c_str(), nullptr);
+    
+    std::ofstream config_file(config_path);
+    if (!config_file.is_open()) {
+        std::cerr << "\u2716 \u65e0\u6cd5\u521b\u5efa\u914d\u7f6e\u6587\u4ef6\n";
+        return false;
+    }
+    config_file << config_content;
+    config_file.close();
+    
+    std::cout << "\u2713 \u914d\u7f6e\u6587\u4ef6\u5df2\u521b\u5efa: " << config_path << "\n";
+    
+    std::string install_cmd = "zasca-tunnel.exe install -token " + tunnel_token + " -server " + gateway_url;
+    
+    std::cout << "\u6b63\u5728\u6267\u884c: " << install_cmd << "\n";
+    
+    int result = system(install_cmd.c_str());
+    
+    if (result == 0) {
+        std::cout << "\u2713 Tunnel\u670d\u52a1\u5b89\u88c5\u6210\u529f\n";
+        return true;
+    } else {
+        std::cerr << "\u2716 Tunnel\u670d\u52a1\u5b89\u88c5\u5931\u8d25\n";
+        return false;
+    }
+}
+
+bool HSideInitializer::setup_tunnel() {
+    std::cout << "\u6b63\u5728\u83b7\u53d6Tunnel\u914d\u7f6e...\n";
+    
+    std::string url = c_side_url_ + "/tunnel/config/";
+    
+    json request_body = {
+        {"session_token", session_token_}
+    };
+    std::string body_str = request_body.dump();
+    
+    URL_COMPONENTSA uc = {};
+    uc.dwStructSize = sizeof(uc);
+    
+    char scheme[16] = {};
+    char hostname[256] = {};
+    char url_path[2048] = {};
+    
+    uc.lpszScheme = scheme;
+    uc.dwSchemeLength = sizeof(scheme);
+    uc.lpszHostName = hostname;
+    uc.dwHostNameLength = sizeof(hostname);
+    uc.lpszUrlPath = url_path;
+    uc.dwUrlPathLength = sizeof(url_path);
+    
+    if (!InternetCrackUrlA(url.c_str(), 0, 0, &uc)) {
+        std::cerr << "\u2716 \u89e3\u6790URL\u5931\u8d25\n";
+        return false;
+    }
+    
+    bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
+    
+    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    if (!h_internet) {
+        std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
+        return false;
+    }
+    
+    HINTERNET h_connect = InternetConnectA(h_internet, hostname, uc.nPort,
+                                           nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
+    if (!h_connect) {
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 InternetConnectA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD flags = (use_https ? INTERNET_FLAG_SECURE : 0) |
+                  INTERNET_FLAG_NO_CACHE_WRITE | 0x00000100;
+    
+    HINTERNET h_request = HttpOpenRequestA(h_connect, "POST", url_path,
+                                           nullptr, nullptr, nullptr, flags, 0);
+    if (!h_request) {
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpOpenRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    std::string headers = "Content-Type: application/json\r\n";
+    
+    if (!HttpSendRequestA(h_request, headers.c_str(), static_cast<DWORD>(headers.length()),
+                          const_cast<char*>(body_str.c_str()), static_cast<DWORD>(body_str.length()))) {
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpSendRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD status_code = 0;
+    DWORD status_code_len = sizeof(status_code);
+    HttpQueryInfoA(h_request, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                   &status_code, &status_code_len, nullptr);
+    
+    std::string response_body;
+    char buffer[4096];
+    DWORD bytes_read = 0;
+    while (InternetReadFile(h_request, buffer, sizeof(buffer) - 1, &bytes_read) && bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+        response_body.append(buffer, bytes_read);
+    }
+    
+    InternetCloseHandle(h_request);
+    InternetCloseHandle(h_connect);
+    InternetCloseHandle(h_internet);
+    
+    if (status_code != 200) {
+        std::cerr << "\u2716 \u83b7\u53d6Tunnel\u914d\u7f6e\u5931\u8d25\uff0c\u72b6\u6001\u7801: " << status_code << "\n";
+        return false;
+    }
+    
+    try {
+        json response = json::parse(response_body);
+        
+        if (!response.value("success", false)) {
+            std::cerr << "\u2716 \u83b7\u53d6Tunnel\u914d\u7f6e\u5931\u8d25: " << response.value("error", "Unknown error") << "\n";
+            return false;
+        }
+        
+        json data = response["data"];
+        std::string tunnel_token = data.value("tunnel_token", "");
+        std::string gateway_url = data.value("gateway_url", "");
+        
+        std::cout << "\u2713 \u83b7\u53d6Tunnel\u914d\u7f6e\u6210\u529f\n";
+        std::cout << "  Tunnel Token: " << tunnel_token << "\n";
+        std::cout << "  Gateway URL: " << gateway_url << "\n";
+        
+        if (!download_tunnel_client("amd64")) {
+            return false;
+        }
+        
+        if (!install_tunnel_service(tunnel_token, gateway_url)) {
+            return false;
+        }
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\u2716 \u89e3\u6790\u54cd\u5e94\u5931\u8d25: " << e.what() << "\n";
+        return false;
+    }
 }
 
 void HSideInitializer::initialize() {
     std::cout << "\u5f00\u59cbZASCA H\u7aef\u521d\u59cb\u5316\u6d41\u7a0b...\n";
+    
+    // 如果是自动注册模式，先完成注册
+    if (auto_register_) {
+        std::cout << "\u68c0\u6d4b\u5230\u81ea\u52a8\u6ce8\u518c\u6a21\u5f0f...\n";
+        if (!complete_auto_register()) {
+            std::cerr << "\u2716 \u81ea\u52a8\u6ce8\u518c\u5931\u8d25\uff0c\u7ec8\u6b62\u521d\u59cb\u5316\n";
+            return;
+        }
+    }
+    
     activate_with_totp();
+    
+    if (ask_tunnel_installation()) {
+        std::cout << "\n\u5f00\u59cb\u914d\u7f6eTunnel\u7a7f\u900f\u670d\u52a1...\n";
+        if (setup_tunnel()) {
+            std::cout << std::string(60, '=') << "\n";
+            std::cout << "\u2713 Tunnel\u7a7f\u900f\u670d\u52a1\u914d\u7f6e\u5b8c\u6210\uff01\n";
+            std::cout << "\u60a8\u7684\u4e3b\u673a\u73b0\u5728\u53ef\u4ee5\u901a\u8fc7Tunnel\u88ab\u8fdc\u7a0b\u7ba1\u7406\u3002\n";
+            std::cout << std::string(60, '=') << "\n";
+        } else {
+            std::cout << "\u26a0 Tunnel\u914d\u7f6e\u5931\u8d25\uff0c\u4f46\u57fa\u672c\u521d\u59cb\u5316\u5df2\u5b8c\u6210\u3002\n";
+        }
+    } else {
+        std::cout << "\u8df3\u8fc7Tunnel\u5b89\u88c5\u3002\n";
+    }
+}
+
+bool HSideInitializer::complete_auto_register() {
+    std::cout << "\u6b63\u5728\u5411\u670d\u52a1\u5668\u6ce8\u518c\u4e3b\u673a...\n";
+    
+    std::string url = c_side_url_ + "/bootstrap/api/complete-auto-register/";
+    
+    json request_body = {
+        {"token", token_},
+        {"hostname", hostname_}
+    };
+    std::string body_str = request_body.dump();
+    
+    URL_COMPONENTSA uc = {};
+    uc.dwStructSize = sizeof(uc);
+    
+    char scheme[16] = {};
+    char hostname[256] = {};
+    char url_path[2048] = {};
+    
+    uc.lpszScheme = scheme;
+    uc.dwSchemeLength = sizeof(scheme);
+    uc.lpszHostName = hostname;
+    uc.dwHostNameLength = sizeof(hostname);
+    uc.lpszUrlPath = url_path;
+    uc.dwUrlPathLength = sizeof(url_path);
+    
+    if (!InternetCrackUrlA(url.c_str(), 0, 0, &uc)) {
+        std::cerr << "\u2716 \u89e3\u6790URL\u5931\u8d25\n";
+        return false;
+    }
+    
+    bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
+    
+    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    if (!h_internet) {
+        std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
+        return false;
+    }
+    
+    HINTERNET h_connect = InternetConnectA(h_internet, hostname, uc.nPort,
+                                           nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
+    if (!h_connect) {
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 InternetConnectA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD flags = (use_https ? INTERNET_FLAG_SECURE : 0) |
+                  INTERNET_FLAG_NO_CACHE_WRITE | 0x00000100;
+    
+    HINTERNET h_request = HttpOpenRequestA(h_connect, "POST", url_path,
+                                           nullptr, nullptr, nullptr, flags, 0);
+    if (!h_request) {
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpOpenRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    std::string headers = "Content-Type: application/json\r\n";
+    
+    if (!HttpSendRequestA(h_request, headers.c_str(), static_cast<DWORD>(headers.length()),
+                          const_cast<char*>(body_str.c_str()), static_cast<DWORD>(body_str.length()))) {
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        std::cerr << "\u2716 HttpSendRequestA\u5931\u8d25\n";
+        return false;
+    }
+    
+    DWORD status_code = 0;
+    DWORD status_code_len = sizeof(status_code);
+    HttpQueryInfoA(h_request, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                   &status_code, &status_code_len, nullptr);
+    
+    std::string response_body;
+    char buffer[4096];
+    DWORD bytes_read = 0;
+    while (InternetReadFile(h_request, buffer, sizeof(buffer) - 1, &bytes_read) && bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+        response_body.append(buffer, bytes_read);
+    }
+    
+    InternetCloseHandle(h_request);
+    InternetCloseHandle(h_connect);
+    InternetCloseHandle(h_internet);
+    
+    if (status_code != 200) {
+        std::cerr << "\u2716 \u6ce8\u518c\u5931\u8d25\uff0c\u72b6\u6001\u7801: " << status_code << "\n";
+        return false;
+    }
+    
+    try {
+        json response = json::parse(response_body);
+        
+        if (!response.value("success", false)) {
+            std::cerr << "\u2716 \u6ce8\u518c\u5931\u8d25: " << response.value("error", "Unknown error") << "\n";
+            return false;
+        }
+        
+        json data = response["data"];
+        host_id_ = std::to_string(data.value("host_id", 0));
+        
+        std::cout << "\u2713 \u4e3b\u673a\u6ce8\u518c\u6210\u529f\n";
+        std::cout << "  \u4e3b\u673aID: " << host_id_ << "\n";
+        std::cout << "  \u4e3b\u673a\u540d: " << data.value("hostname", "") << "\n";
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\u2716 \u89e3\u6790\u54cd\u5e94\u5931\u8d25: " << e.what() << "\n";
+        return false;
+    }
 }
 
 void HSideInitializer::print_info() const {
@@ -462,4 +878,6 @@ void HSideInitializer::print_info() const {
     std::cout << "2. \u751f\u6210\u5e76\u663e\u793aTOTP\u7801\n";
     std::cout << "3. \u5411C\u7aef\u53d1\u8d77token\u4ea4\u6362\u8bf7\u6c42\n";
     std::cout << "4. \u4fdd\u5b58\u4f1a\u8bdd\u4ee4\u724c\n";
+    std::cout << "5. \u8be2\u95ee\u662f\u5426\u9700\u8981\u5b89\u88c5Tunnel\u7a7f\u900f\u670d\u52a1\n";
+    std::cout << "6. \u5982\u9700\u8981\uff0c\u81ea\u52a8\u4e0b\u8f7d\u5e76\u914d\u7f6eTunnel\u5ba2\u6237\u7aef\n";
 }
