@@ -14,12 +14,12 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "Supercmd"
-            VALUE "FileDescription", "ZASCA Host-Side Initialization Program"
+            VALUE "FileDescription", "2c2a Host-Side Initialization Program"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "h_side_init"
             VALUE "LegalCopyright", "Copyright (C) 2024 Supercmd"
             VALUE "OriginalFilename", "h_side_init.exe"
-            VALUE "ProductName", "ZASCA H-Side"
+            VALUE "ProductName", "2c2a H-Side"
             VALUE "ProductVersion", "1.0.0.0"
         END
     END

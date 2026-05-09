@@ -177,7 +177,7 @@ HttpResponse http_post(const std::string& url, const std::string& auth_token) {
 
     bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
 
-    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    HINTERNET h_internet = InternetOpenA("2c2a-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
     if (!h_internet) throw std::runtime_error("InternetOpenA failed");
 
     DWORD timeout = 30000;
@@ -342,7 +342,7 @@ std::string HSideInitializer::generate_and_display_totp() {
     std::string current_code = generate_totp(k_totp, 6, 30);
 
     std::cout << std::string(60, '=') << "\n";
-    std::cout << "ZASCA H\u7aef\u521d\u59cb\u5316 - TOTP\u9a8c\u8bc1\u9636\u6bb5\n";
+    std::cout << "2c2a H\u7aef\u521d\u59cb\u5316 - TOTP\u9a8c\u8bc1\u9636\u6bb5\n";
     std::cout << "\u4e3b\u673aID: " << host_id_ << "\n";
     std::cout << "\u4e3b\u673a\u540d: " << hostname_ << "\n";
     std::cout << "IP\u5730\u5740: " << ip_address_ << "\n";
@@ -439,7 +439,7 @@ std::string HSideInitializer::activate_with_totp() {
     session_token_ = exchange_token();
 
     std::cout << std::string(60, '=') << "\n";
-    std::cout << "ZASCA H\u7aef\u521d\u59cb\u5316\u5b8c\u6210\uff01\n";
+    std::cout << "2c2a H\u7aef\u521d\u59cb\u5316\u5b8c\u6210\uff01\n";
     std::cout << "\u2713 H\u7aef\u5df2\u6fc0\u6d3b\uff0c\u4f1a\u8bdd\u4ee4\u724c: " << session_token_ << "\n";
     std::cout << "\u2713 H\u7aef\u73b0\u5728\u5904\u4e8eZeroAgent\u72b6\u6001\uff0c\u7b49\u5f85C\u7aef\u8fde\u63a5\n";
     std::cout << std::string(60, '=') << "\n";
@@ -449,7 +449,7 @@ std::string HSideInitializer::activate_with_totp() {
 
 bool HSideInitializer::ask_tunnel_installation() {
     std::cout << std::string(60, '=') << "\n";
-    std::cout << "\u662f\u5426\u9700\u8981\u5b89\u88c5ZASCA Tunnel\u7a7f\u900f\u670d\u52a1\uff1f\n";
+    std::cout << "\u662f\u5426\u9700\u8981\u5b89\u88c52c2a Tunnel\u7a7f\u900f\u670d\u52a1\uff1f\n";
     std::cout << "Tunnel\u670d\u52a1\u53ef\u4ee5\u8ba9\u60a8\u7684\u4e3b\u673a\u5728\u6ca1\u6709\u516c\u7f51IP\u7684\u60c5\u51b5\u4e0b\u4e5f\u80fd\u88ab\u8fdc\u7a0b\u7ba1\u7406\u3002\n";
     std::cout << "\u8f93\u5165 'y' \u6216 'yes' \u5b89\u88c5Tunnel\uff0c\u5176\u4ed6\u4efb\u610f\u952e\u8df3\u8fc7: ";
     
@@ -486,7 +486,7 @@ bool HSideInitializer::download_tunnel_client(const std::string& arch) {
     
     bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
     
-    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    HINTERNET h_internet = InternetOpenA("2c2a-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
     if (!h_internet) {
         std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
         return false;
@@ -538,7 +538,7 @@ bool HSideInitializer::download_tunnel_client(const std::string& arch) {
         return false;
     }
     
-    std::string exe_path = "zasca-tunnel.exe";
+    std::string exe_path = "2c2a-tunnel.exe";
     std::ofstream out_file(exe_path, std::ios::binary);
     
     if (!out_file.is_open()) {
@@ -572,7 +572,7 @@ bool HSideInitializer::install_tunnel_service(const std::string& tunnel_token, c
     
     std::string config_content = "token: " + tunnel_token + "\nserver: " + gateway_url + "\n";
     
-    std::string config_dir = "C:\\ProgramData\\ZASCA";
+    std::string config_dir = "C:\\ProgramData\\2c2a";
     std::string config_path = config_dir + "\\tunnel.yaml";
     
     CreateDirectoryA(config_dir.c_str(), nullptr);
@@ -587,7 +587,7 @@ bool HSideInitializer::install_tunnel_service(const std::string& tunnel_token, c
     
     std::cout << "\u2713 \u914d\u7f6e\u6587\u4ef6\u5df2\u521b\u5efa: " << config_path << "\n";
     
-    std::string install_cmd = "zasca-tunnel.exe install -token " + tunnel_token + " -server " + gateway_url;
+    std::string install_cmd = "2c2a-tunnel.exe install -token " + tunnel_token + " -server " + gateway_url;
     
     std::cout << "\u6b63\u5728\u6267\u884c: " << install_cmd << "\n";
     
@@ -633,7 +633,7 @@ bool HSideInitializer::setup_tunnel() {
     
     bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
     
-    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    HINTERNET h_internet = InternetOpenA("2c2a-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
     if (!h_internet) {
         std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
         return false;
@@ -725,7 +725,7 @@ bool HSideInitializer::setup_tunnel() {
 }
 
 void HSideInitializer::initialize() {
-    std::cout << "\u5f00\u59cbZASCA H\u7aef\u521d\u59cb\u5316\u6d41\u7a0b...\n";
+    std::cout << "\u5f00\u59cb2c2a H\u7aef\u521d\u59cb\u5316\u6d41\u7a0b...\n";
     
     // 如果是自动注册模式，先完成注册
     if (auto_register_) {
@@ -785,7 +785,7 @@ bool HSideInitializer::complete_auto_register() {
     
     bool use_https = (std::string(scheme, uc.dwSchemeLength) == "https");
     
-    HINTERNET h_internet = InternetOpenA("ZASCA-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+    HINTERNET h_internet = InternetOpenA("2c2a-H-Side/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
     if (!h_internet) {
         std::cerr << "\u2716 InternetOpenA\u5931\u8d25\n";
         return false;

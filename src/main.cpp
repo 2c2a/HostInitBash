@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    const char* demo_env = std::getenv("ZASCA_DEMO");
+    const char* demo_env = std::getenv("2C2A_DEMO");
     if (demo_env && std::string(demo_env) == "1") {
         std::cerr << "\u9519\u8bef: \u6b64\u811a\u672c\u4e0d\u80fd\u5728DEMO\u6a21\u5f0f\u4e0b\u8fd0\u884c\n";
         return 1;
