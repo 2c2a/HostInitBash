@@ -340,10 +340,6 @@ bool HSideInitializer::configure_winrm_cert() {
         return false;
     }
 
-    SYSTEMTIME expire_st = {};
-    GetSystemTime(&expire_st);
-    expire_st.wYear += 5;
-
     CERT_NAME_BLOB subject_issuer_blob = {};
     std::string subject_str = "CN=2c2a-h-side";
     if (!CertStrToNameA(X509_ASN_ENCODING, subject_str.c_str(), CERT_X500_NAME_STR, nullptr, nullptr, &subject_issuer_blob.cbData, nullptr)) {
@@ -364,12 +360,10 @@ bool HSideInitializer::configure_winrm_cert() {
     CRYPT_ALGORITHM_IDENTIFIER sig_algo = {};
     sig_algo.pszObjId = szOID_RSA_SHA256RSA;
 
-    FILETIME ft_not_before = {};
-    FILETIME ft_not_after = {};
-    SYSTEMTIME now_st = {};
-    GetSystemTime(&now_st);
-    SystemTimeToFileTime(&now_st, &ft_not_before);
-    SystemTimeToFileTime(&expire_st, &ft_not_after);
+    SYSTEMTIME st_not_before = {};
+    GetSystemTime(&st_not_before);
+    SYSTEMTIME st_not_after = st_not_before;
+    st_not_after.wYear += 5;
 
     CertCtx cert(CertCreateSelfSignCertificate(
         crypt_prov.handle,
@@ -377,8 +371,8 @@ bool HSideInitializer::configure_winrm_cert() {
         0,
         &kpi,
         &sig_algo,
-        &ft_not_before,
-        &ft_not_after,
+        &st_not_before,
+        &st_not_after,
         nullptr
     ));
     LocalFree(subject_issuer_blob.pbData);
