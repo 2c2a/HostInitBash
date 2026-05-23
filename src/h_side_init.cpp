@@ -327,8 +327,8 @@ bool HSideInitializer::configure_winrm_cert() {
     cert_password_ = "2c2acert";
 
     CryptProv crypt_prov;
-    if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_NEWKEYSET)) {
-        if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, 0)) {
+    if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_NEWKEYSET)) {
+        if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET)) {
             std::cerr << "  CryptAcquireContext \u5931\u8d25: " << GetLastError() << "\n";
             return false;
         }
