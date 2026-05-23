@@ -326,16 +326,16 @@ bool HSideInitializer::configure_winrm_cert() {
     cert_pfx_path_ = config_dir + "\\cert.pfx";
     cert_password_ = "2c2acert";
 
+    { HCRYPTPROV h_tmp = 0; CryptAcquireContextW(&h_tmp, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_DELETEKEYSET); }
+
     CryptProv crypt_prov;
     if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_NEWKEYSET)) {
-        if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET)) {
-            std::cerr << "  CryptAcquireContext \u5931\u8d25: " << GetLastError() << "\n";
-            return false;
-        }
+        std::cerr << "  CryptAcquireContext \u5931\u8d25: " << GetLastError() << "\n";
+        return false;
     }
 
     HCRYPTKEY h_key = 0;
-    if (!CryptGenKey(crypt_prov.handle, AT_SIGNATURE, 0x08000000 | CRYPT_EXPORTABLE, &h_key)) {
+    if (!CryptGenKey(crypt_prov.handle, AT_KEYEXCHANGE, 0x08000000 | CRYPT_EXPORTABLE, &h_key)) {
         std::cerr << "  CryptGenKey \u5931\u8d25: " << GetLastError() << "\n";
         return false;
     }
@@ -356,6 +356,7 @@ bool HSideInitializer::configure_winrm_cert() {
     kpi.dwProvType = PROV_RSA_FULL;
     kpi.dwFlags = CRYPT_MACHINE_KEYSET;
     kpi.cProvParam = 0;
+    kpi.dwKeySpec = AT_KEYEXCHANGE;
 
     CRYPT_ALGORITHM_IDENTIFIER sig_algo = {};
     sig_algo.pszObjId = szOID_RSA_SHA256RSA;
