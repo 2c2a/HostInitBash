@@ -20,6 +20,7 @@
 #include <shlobj.h>
 #include <wincrypt.h>
 #include <lm.h>
+#include <winsvc.h>
 
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "netapi32.lib")
@@ -155,6 +156,38 @@ struct CryptProv {
     CryptProv& operator=(const CryptProv&) = delete;
     explicit operator bool() const { return handle != 0; }
 };
+
+static bool ensure_winrm_service() {
+    SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!scm) return false;
+
+    SC_HANDLE svc = OpenServiceA(scm, "WinRM", SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
+    if (!svc) { CloseServiceHandle(scm); return false; }
+
+    ChangeServiceConfigA(svc, SERVICE_NO_CHANGE, SERVICE_AUTO_START,
+        SERVICE_NO_CHANGE, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+
+    SERVICE_STATUS status = {};
+    bool running = false;
+    if (QueryServiceStatus(svc, &status)) {
+        running = (status.dwCurrentState == SERVICE_RUNNING);
+    }
+
+    if (!running) {
+        StartServiceA(svc, 0, nullptr);
+        for (int i = 0; i < 20; ++i) {
+            Sleep(500);
+            if (QueryServiceStatus(svc, &status) && status.dwCurrentState == SERVICE_RUNNING) {
+                running = true;
+                break;
+            }
+        }
+    }
+
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+    return running;
+}
 
 } // anonymous namespace
 
@@ -301,17 +334,7 @@ bool HSideInitializer::create_service_account(const std::string& username, const
 
     DWORD err = 0;
     NET_API_STATUS status = NetUserAdd(nullptr, 1, reinterpret_cast<LPBYTE>(&ui), &err);
-    if (status == NERR_UserExists) {
-        USER_INFO_1003 ui_pwd = {};
-        ui_pwd.usri1003_password = const_cast<LPWSTR>(w_password.c_str());
-        if (NetUserSetInfo(nullptr, w_username.c_str(), 1003, reinterpret_cast<LPBYTE>(&ui_pwd), nullptr) != NERR_Success) {
-            std::cerr << "  \u66f4\u65b0\u7528\u6237\u5bc6\u7801\u5931\u8d25\n";
-            return false;
-        }
-        USER_INFO_1008 ui_flags = {};
-        ui_flags.usri1008_flags = UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT;
-        NetUserSetInfo(nullptr, w_username.c_str(), 1008, reinterpret_cast<LPBYTE>(&ui_flags), nullptr);
-    } else if (status != NERR_Success) {
+    if (status != NERR_Success && status != NERR_UserExists) {
         std::cerr << "  \u521b\u5efa\u7528\u6237\u5931\u8d25: " << status << "\n";
         return false;
     }
@@ -323,6 +346,9 @@ bool HSideInitializer::create_service_account(const std::string& username, const
         std::cerr << "  \u6dfb\u52a0\u7ba1\u7406\u5458\u7ec4\u5931\u8d25: " << status << "\n";
         return false;
     }
+
+    NetLocalGroupAddMembers(nullptr, L"Remote Management Users", 3, reinterpret_cast<LPBYTE>(&mi), 1);
+    NetLocalGroupAddMembers(nullptr, L"\u8fdc\u7a0b\u7ba1\u7406\u7528\u6237", 3, reinterpret_cast<LPBYTE>(&mi), 1);
 
     return true;
 }
@@ -595,32 +621,31 @@ bool HSideInitializer::configure_winrm_cert() {
         return false;
     }
     std::cout << "  \u2713 \u670d\u52a1\u8d26\u6237: " << svc_user << "\n";
+    Sleep(2000);
 
     std::string full_username = hostname_ + "\\" + svc_user;
 
-    std::string ps_path = config_dir + "\\winrm_setup.ps1";
-    std::ofstream ps_file(ps_path);
-    if (!ps_file.is_open()) {
-        std::cerr << "  \u65e0\u6cd5\u521b\u5efa\u914d\u7f6e\u811a\u672c\n";
-        return false;
+    if (!ensure_winrm_service()) {
+        std::cerr << "  \u26a0 WinRM \u670d\u52a1\u542f\u52a8\u5931\u8d25\n";
     }
 
-    ps_file << "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } catch {}\n";
-    ps_file << "Get-ChildItem 'WSMan:\\localhost\\Listener' | Where-Object { $_.Transport -eq 'HTTPS' } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue\n";
-    ps_file << "New-Item -Path 'WSMan:\\localhost\\Listener' -Address '*' -Transport HTTPS -CertificateThumbprint '" << thumbprint_hex << "' -Force | Out-Null\n";
-    ps_file << "if (Test-Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate') { Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force }\n";
-    ps_file << "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force\n";
-    ps_file << "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force\n";
-    ps_file << "$secPwd = ConvertTo-SecureString -String '" << svc_pwd << "' -Force -AsPlainText\n";
-    ps_file << "$cred = New-Object System.Management.Automation.PSCredential('" << full_username << "',$secPwd)\n";
-    ps_file << "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' -Issuer '" << thumbprint_hex << "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue\n";
-    ps_file.close();
+    system("winrm delete winrm/config/Listener?Address=*+Transport=HTTPS 2>nul");
 
-    std::string cmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ps_path + "\"";
-    int ps_ret = system(cmd.c_str());
-    DeleteFileA(ps_path.c_str());
-    if (ps_ret != 0) {
-        std::cerr << "  \u26a0 WinRM \u914d\u7f6e\u53ef\u80fd\u672a\u5b8c\u5168\u6210\u529f\n";
+    std::string create_listener = "winrm create winrm/config/Listener?Address=*+Transport=HTTPS "
+        "@{Hostname=2c2a-h-side;CertificateThumbprint=" + thumbprint_hex + "}";
+    if (system(create_listener.c_str()) != 0) {
+        std::cerr << "  \u26a0 \u521b\u5efa HTTPS \u76d1\u542c\u5668\u5931\u8d25\n";
+    }
+
+    system("winrm set winrm/config/Service/Auth @{ClientCertificate=true;Basic=true}");
+    system("winrm set winrm/config/Service @{AllowUnencrypted=false}");
+    system("netsh advfirewall firewall add rule name=\"WinRM HTTPS\" dir=in action=allow protocol=TCP localport=5986 2>nul");
+
+    std::string cert_map = "winrm create winrm/config/Service/Auth/CertMapping?"
+        "Issuer=" + thumbprint_hex + "+Subject=2c2a-h-side+URI=* "
+        "@{UserName=" + full_username + ";Password=" + svc_pwd + "}";
+    if (system(cert_map.c_str()) != 0) {
+        std::cerr << "  \u26a0 \u8bc1\u4e66\u6620\u5c04\u914d\u7f6e\u5931\u8d25\n";
     }
 
     std::string thumb_path = config_dir + "\\winrm_cert_thumb.txt";
