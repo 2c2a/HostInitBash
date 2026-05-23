@@ -636,11 +636,80 @@ bool HSideInitializer::configure_winrm_cert() {
         bat << "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=\"2c2a-h-side\";CertificateThumbprint=\"" << thumbprint_hex << "\"}\n";
         bat << "winrm set winrm/config/Service/Auth @{ClientCertificate=\"true\";Basic=\"true\"}\n";
         bat << "winrm set winrm/config/Service @{AllowUnencrypted=\"false\"}\n";
-        bat << "netsh advfirewall firewall add rule name=\"WinRM HTTPS\" dir=in action=allow protocol=TCP localport=5986 2>nul\n";
+        bat << "netsh advfirewall firewall delete rule name=\"WinRM HTTPS\" >nul 2>&1\n";
+        bat << "netsh advfirewall firewall add rule name=\"WinRM HTTPS\" dir=in action=allow protocol=TCP localport=5986\n";
         bat << "winrm create winrm/config/Service/Auth/CertMapping?Issuer=" << thumbprint_hex << "+Subject=2c2a-h-side+URI=* @{UserName=\"" << full_username << "\";Password=\"" << svc_pwd << "\"}\n";
     }
     system(bat_path.c_str());
     DeleteFileA(bat_path.c_str());
+
+    std::cout << "  \u6b63\u5728\u91cd\u542f WinRM \u670d\u52a1\u4ee5\u542f\u7528 HTTPS \u76d1\u542c...\n";
+    {
+        SC_HANDLE scm_r = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
+        if (scm_r) {
+            SC_HANDLE svc_r = OpenServiceA(scm_r, "WinRM", SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS);
+            if (svc_r) {
+                SERVICE_STATUS svc_st = {};
+                ControlService(svc_r, SERVICE_CONTROL_STOP, &svc_st);
+                Sleep(2000);
+                StartServiceA(svc_r, 0, nullptr);
+                bool restarted = false;
+                for (int i = 0; i < 20; ++i) {
+                    Sleep(500);
+                    if (QueryServiceStatus(svc_r, &svc_st) && svc_st.dwCurrentState == SERVICE_RUNNING) {
+                        restarted = true;
+                        break;
+                    }
+                }
+                if (restarted) {
+                    std::cout << "  \u2713 WinRM \u670d\u52a1\u5df2\u91cd\u542f\n";
+                } else {
+                    std::cerr << "  \u26a0 WinRM \u670d\u52a1\u91cd\u542f\u5931\u8d25\n";
+                }
+                CloseServiceHandle(svc_r);
+            }
+            CloseServiceHandle(scm_r);
+        }
+    }
+
+    {
+        WSADATA wsa_d;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa_d) == 0) {
+            bool port_open = false;
+            for (int i = 0; i < 10; ++i) {
+                SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+                if (sock != INVALID_SOCKET) {
+                    u_long mode = 1;
+                    ioctlsocket(sock, FIONBIO, &mode);
+                    sockaddr_in addr = {};
+                    addr.sin_family = AF_INET;
+                    addr.sin_port = htons(5986);
+                    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+                    connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+                    fd_set write_fds;
+                    FD_ZERO(&write_fds);
+                    FD_SET(sock, &write_fds);
+                    timeval tv = {1, 0};
+                    int sel = select(0, nullptr, &write_fds, nullptr, &tv);
+                    if (sel > 0) {
+                        int sock_err = 0;
+                        int sock_err_len = sizeof(sock_err);
+                        getsockopt(sock, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&sock_err), &sock_err_len);
+                        if (sock_err == 0) port_open = true;
+                    }
+                    closesocket(sock);
+                }
+                if (port_open) break;
+                Sleep(1000);
+            }
+            WSACleanup();
+            if (port_open) {
+                std::cout << "  \u2713 WinRM HTTPS \u7aef\u53e3 5986 \u5df2\u5f00\u653e\n";
+            } else {
+                std::cerr << "  \u26a0 WinRM HTTPS \u7aef\u53e3 5986 \u672a\u5f00\u653e\uff0c\u8bf7\u68c0\u67e5\u914d\u7f6e\n";
+            }
+        }
+    }
 
     std::string thumb_path = config_dir + "\\winrm_cert_thumb.txt";
     std::ofstream tf(thumb_path);
@@ -705,11 +774,6 @@ bool HSideInitializer::upload_cert_to_server() {
         std::string url = c_side_url_ + "/bootstrap/api/upload_host_cert/";
         HttpResponse resp = http_request("POST", url, "", payload.dump(), "application/json");
 
-        if (debug_) {
-            std::cout << "  [DEBUG] upload status=" << resp.status_code << "\n";
-            std::cout << "  [DEBUG] upload body=" << resp.body.substr(0, 500) << "\n";
-        }
-
         if (resp.status_code == 200) {
             json result = json::parse(resp.body);
             if (result.value("success", false)) {
@@ -718,8 +782,7 @@ bool HSideInitializer::upload_cert_to_server() {
                 return true;
             }
         }
-        std::cerr << "  \u8bc1\u4e66\u4e0a\u4f20\u5931\u8d25 (HTTP " << resp.status_code << ")\n";
-        if (!resp.body.empty()) std::cerr << "  " << resp.body.substr(0, 200) << "\n";
+        std::cerr << "  \u8bc1\u4e66\u4e0a\u4f20\u5931\u8d25\n";
         return false;
     } catch (const std::exception& e) {
         std::cerr << "  \u4e0a\u4f20\u9519\u8bef: " << e.what() << "\n";
