@@ -591,11 +591,11 @@ bool HSideInitializer::configure_winrm_cert() {
         "New-Item -Path 'WSMan:\\localhost\\Listener' "
         "-Address '*' -Transport HTTPS -CertificateThumbprint '" + thumbprint_hex + "' "
         "-Force -ErrorAction SilentlyContinue | Out-Null; "
-        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force; "
+        "if (Test-Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate') { Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force }; "
         "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force; "
         "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force; "
         "$secPwd = ConvertTo-SecureString -String '" + svc_pwd + "' -Force -AsPlainText; "
-        "$cred = New-Object System.Management.Automation.PSCredential('" + svc_user + "',$secPwd); "
+        "$cred = New-Object System.Management.Automation.PSCredential('.\\" + svc_user + "',$secPwd); "
         "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' "
         "-Issuer '" + thumbprint_hex + "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
 
