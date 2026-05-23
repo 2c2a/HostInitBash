@@ -198,7 +198,7 @@ bool HSideInitializer::exchange_token() {
     std::cout << "\u6b63\u5728\u8fde\u63a5\u670d\u52a1\u5668...\n";
     std::cout << "  \u4e3b\u673a\u540d: " << hostname_ << "  IP: " << ip_address_ << "\n";
 
-    std::string url = c_side_url_ + "/bootstrap/api/exchange_token/";
+    std::string url = c_side_url_ + "/bootstrap/api/get_session_token/";
     const int max_retries = 3;
 
     for (int attempt = 0; attempt < max_retries; ++attempt) {
