@@ -28,7 +28,6 @@ private:
                               const std::string& body = "",
                               const std::string& content_type = "application/json");
 
-    bool wait_for_pairing();
     bool exchange_token();
     void save_config();
 };

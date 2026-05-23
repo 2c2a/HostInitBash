@@ -194,36 +194,9 @@ HSideInitializer::HttpResponse HSideInitializer::http_request(
     return response;
 }
 
-bool HSideInitializer::wait_for_pairing() {
-    std::cout << "\n\u8bf7\u5728 C \u7aef\u7ba1\u7406\u540e\u53f0\u8f93\u5165\u914d\u5bf9\u7801\u5b8c\u6210\u9a8c\u8bc1\n";
-    std::cout << "\u4e3b\u673a ID: " << host_id_ << "  \u4e3b\u673a\u540d: " << hostname_ << "  IP: " << ip_address_ << "\n";
-    std::cout << "\u7b49\u5f85\u914d\u5bf9\u4e2d";
-
-    std::string url = c_side_url_ + "/bootstrap/api/check_pairing_status";
-    const int max_attempts = 60;
-
-    for (int i = 0; i < max_attempts; ++i) {
-        try {
-            HttpResponse resp = http_request("GET", url, token_);
-            if (resp.status_code == 200) {
-                json result = json::parse(resp.body);
-                if (result.value("paired", false)) {
-                    std::cout << "\n\u2713 \u914d\u5bf9\u6210\u529f!\n";
-                    return true;
-                }
-            }
-        } catch (...) {}
-
-        std::cout << "." << std::flush;
-        Sleep(5000);
-    }
-
-    std::cout << "\n\u2716 \u914d\u5bf9\u8d85\u65f6\uff0c\u8bf7\u91cd\u65b0\u8fd0\u884c\n";
-    return false;
-}
-
 bool HSideInitializer::exchange_token() {
-    std::cout << "\u6b63\u5728\u4ea4\u6362\u4ee4\u724c...\n";
+    std::cout << "\u6b63\u5728\u8fde\u63a5\u670d\u52a1\u5668...\n";
+    std::cout << "  \u4e3b\u673a\u540d: " << hostname_ << "  IP: " << ip_address_ << "\n";
 
     std::string url = c_side_url_ + "/bootstrap/api/exchange_token/";
     const int max_retries = 3;
@@ -290,7 +263,6 @@ void HSideInitializer::initialize() {
     std::cout << "2c2a H\u7aef\u521d\u59cb\u5316\n";
     std::cout << std::string(50, '=') << "\n";
 
-    if (!wait_for_pairing()) return;
     if (!exchange_token()) return;
 
     save_config();
