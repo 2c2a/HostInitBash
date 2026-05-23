@@ -25,7 +25,8 @@ add_executable(h_side_init
 target_link_libraries(h_side_init PRIVATE
     nlohmann_json::nlohmann_json
     wininet
-    bcrypt
+    crypt32
+    netapi32
     ws2_32
 )
 

@@ -18,6 +18,11 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <shlobj.h>
+#include <wincrypt.h>
+#include <lm.h>
+
+#pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "netapi32.lib")
 
 using json = nlohmann::json;
 
@@ -92,6 +97,26 @@ std::string get_program_data_path() {
     return "C:\\ProgramData\\2c2a";
 }
 
+std::string generate_random_password(int length) {
+    const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    HCRYPTPROV hprov = 0;
+    if (!CryptAcquireContextW(&hprov, nullptr, nullptr, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
+        return "";
+    }
+    std::string result(length, '\0');
+    BYTE buf[256] = {};
+    while (length > 0) {
+        DWORD to_gen = min(length, (int)sizeof(buf));
+        if (!CryptGenRandom(hprov, to_gen, buf)) { CryptReleaseContext(hprov, 0); return ""; }
+        for (DWORD i = 0; i < to_gen; ++i) {
+            result[result.size() - length + i] = chars[buf[i] % (sizeof(chars) - 1)];
+        }
+        length -= to_gen;
+    }
+    CryptReleaseContext(hprov, 0);
+    return result;
+}
+
 struct WinInetHandle {
     HINTERNET handle = nullptr;
     explicit WinInetHandle(HINTERNET h = nullptr) : handle(h) {}
@@ -100,6 +125,35 @@ struct WinInetHandle {
     WinInetHandle& operator=(const WinInetHandle&) = delete;
     operator HINTERNET() const { return handle; }
     explicit operator bool() const { return handle != nullptr; }
+};
+
+struct CertCtx {
+    PCCERT_CONTEXT ctx = nullptr;
+    explicit CertCtx(PCCERT_CONTEXT c = nullptr) : ctx(c) {}
+    ~CertCtx() { if (ctx) CertFreeCertificateContext(ctx); }
+    CertCtx(const CertCtx&) = delete;
+    CertCtx& operator=(const CertCtx&) = delete;
+    operator PCCERT_CONTEXT() const { return ctx; }
+    explicit operator bool() const { return ctx != nullptr; }
+};
+
+struct CertStore {
+    HCERTSTORE store = nullptr;
+    explicit CertStore(HCERTSTORE s = nullptr) : store(s) {}
+    ~CertStore() { if (store) CertCloseStore(store, 0); }
+    CertStore(const CertStore&) = delete;
+    CertStore& operator=(const CertStore&) = delete;
+    operator HCERTSTORE() const { return store; }
+    explicit operator bool() const { return store != nullptr; }
+};
+
+struct CryptProv {
+    HCRYPTPROV handle = 0;
+    explicit CryptProv(HCRYPTPROV h = 0) : handle(h) {}
+    ~CryptProv() { if (handle) CryptReleaseContext(handle, 0); }
+    CryptProv(const CryptProv&) = delete;
+    CryptProv& operator=(const CryptProv&) = delete;
+    explicit operator bool() const { return handle != 0; }
 };
 
 } // anonymous namespace
@@ -235,64 +289,268 @@ bool HSideInitializer::exchange_token() {
     return false;
 }
 
-bool HSideInitializer::configure_winrm_cert() {
-    std::cout << "\n\u6b63\u5728\u914d\u7f6e WinRM \u8bc1\u4e66...\n";
+bool HSideInitializer::create_service_account(const std::string& username, const std::string& password) {
+    std::wstring w_username(username.begin(), username.end());
+    std::wstring w_password(password.begin(), password.end());
 
-    std::string ps_script =
-        "$cert = New-SelfSignedCertificate -DnsName '2c2a-h-side' "
-        "-CertStoreLocation 'Cert:\\LocalMachine\\My' "
-        "-FriendlyName '2c2a WinRM' -NotAfter (Get-Date).AddYears(5); "
-        "if (-not $cert) { exit 1 }; "
-        "$thumb = $cert.Thumbprint; "
-        "New-Item -Path 'WSMan:\\localhost\\Listener' "
-        "-Address '*' -Transport HTTPS -CertificateThumbprint $thumb "
-        "-Force -ErrorAction SilentlyContinue | Out-Null; "
-        "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } "
-        "catch {}; "
-        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' "
-        "-Value $true -Force; "
-        "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' "
-        "-Value $false -Force; "
-        "Write-Output $thumb";
+    USER_INFO_1 ui = {};
+    ui.usri1_name = const_cast<LPWSTR>(w_username.c_str());
+    ui.usri1_password = const_cast<LPWSTR>(w_password.c_str());
+    ui.usri1_priv = USER_PRIV_USER;
+    ui.usri1_flags = UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT;
 
-    std::string cmd = "powershell -NoProfile -NonInteractive -Command \""
-        + ps_script + "\"";
-
-    FILE* pipe = _popen(cmd.c_str(), "r");
-    if (!pipe) {
-        std::cerr << "  \u65e0\u6cd5\u6267\u884c PowerShell\n";
+    DWORD err = 0;
+    NET_API_STATUS status = NetUserAdd(nullptr, 1, reinterpret_cast<LPBYTE>(&ui), &err);
+    if (status != NERR_Success && status != NERR_UserExists) {
+        std::cerr << "  \u521b\u5efa\u7528\u6237\u5931\u8d25: " << status << "\n";
         return false;
     }
 
-    char buffer[256] = {};
-    std::string thumbprint;
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        std::string line(buffer);
-        size_t start = line.find_first_not_of(" \t\r\n");
-        size_t end = line.find_last_not_of(" \t\r\n");
-        if (start != std::string::npos && end != std::string::npos) {
-            thumbprint = line.substr(start, end - start + 1);
-        }
-    }
-    int ret = _pclose(pipe);
-
-    if (ret != 0 || thumbprint.empty()) {
-        std::cerr << "  \u8bc1\u4e66\u521b\u5efa\u5931\u8d25\n";
+    LOCALGROUP_MEMBERS_INFO_3 mi = {};
+    mi.lgrmi3_domainandname = const_cast<LPWSTR>(w_username.c_str());
+    status = NetLocalGroupAddMembers(nullptr, L"Administrators", 3, reinterpret_cast<LPBYTE>(&mi), 1);
+    if (status != NERR_Success && status != ERROR_MEMBER_IN_ALIAS) {
+        std::cerr << "  \u6dfb\u52a0\u7ba1\u7406\u5458\u7ec4\u5931\u8d25: " << status << "\n";
         return false;
-    }
-
-    std::cout << "  \u2713 WinRM HTTPS \u8bc1\u4e66\u5df2\u914d\u7f6e\n";
-    std::cout << "  \u8bc1\u4e66\u6307\u7eb9: " << thumbprint << "\n";
-
-    std::string config_dir = get_program_data_path();
-    std::string cert_path = config_dir + "\\winrm_cert_thumb.txt";
-    std::ofstream f(cert_path);
-    if (f.is_open()) {
-        f << thumbprint;
-        f.close();
     }
 
     return true;
+}
+
+bool HSideInitializer::configure_winrm_cert() {
+    std::cout << "\n\u6b63\u5728\u914d\u7f6e WinRM \u8bc1\u4e66...\n";
+
+    std::string config_dir = get_program_data_path();
+    CreateDirectoryA(config_dir.c_str(), nullptr);
+
+    cert_pfx_path_ = config_dir + "\\cert.pfx";
+    cert_password_ = "2c2acert";
+
+    CryptProv crypt_prov;
+    if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_NEWKEYSET)) {
+        if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, 0)) {
+            std::cerr << "  CryptAcquireContext \u5931\u8d25: " << GetLastError() << "\n";
+            return false;
+        }
+    }
+
+    HCRYPTKEY h_key = 0;
+    if (!CryptGenKey(crypt_prov.handle, AT_SIGNATURE, 0x08000000 | CRYPT_EXPORTABLE, &h_key)) {
+        std::cerr << "  CryptGenKey \u5931\u8d25: " << GetLastError() << "\n";
+        return false;
+    }
+
+    SYSTEMTIME expire_st = {};
+    GetSystemTime(&expire_st);
+    expire_st.wYear += 5;
+
+    CERT_NAME_BLOB subject_issuer_blob = {};
+    std::string subject_str = "CN=2c2a-h-side";
+    if (!CertStrToNameA(X509_ASN_ENCODING, subject_str.c_str(), CERT_X500_NAME_STR, nullptr, nullptr, &subject_issuer_blob.cbData, nullptr)) {
+        CryptDestroyKey(h_key);
+        return false;
+    }
+    subject_issuer_blob.pbData = static_cast<BYTE*>(LocalAlloc(LMEM_FIXED, subject_issuer_blob.cbData));
+    CertStrToNameA(X509_ASN_ENCODING, subject_str.c_str(), CERT_X500_NAME_STR, nullptr, subject_issuer_blob.pbData, &subject_issuer_blob.cbData, nullptr);
+
+    CRYPT_KEY_PROV_INFO kpi = {};
+    std::wstring prov_name(L"2c2a-winrm");
+    kpi.pwszContainerName = const_cast<LPWSTR>(prov_name.c_str());
+    kpi.pwszProvName = nullptr;
+    kpi.dwProvType = PROV_RSA_FULL;
+    kpi.dwFlags = CRYPT_MACHINE_KEYSET;
+    kpi.cProvParam = 0;
+
+    CRYPT_ALGORITHM_IDENTIFIER sig_algo = {};
+    sig_algo.pszObjId = szOID_RSA_SHA256RSA;
+
+    FILETIME ft_not_before = {};
+    FILETIME ft_not_after = {};
+    SYSTEMTIME now_st = {};
+    GetSystemTime(&now_st);
+    SystemTimeToFileTime(&now_st, &ft_not_before);
+    SystemTimeToFileTime(&expire_st, &ft_not_after);
+
+    CertCtx cert(CertCreateSelfSignCertificate(
+        crypt_prov.handle,
+        &subject_issuer_blob,
+        0,
+        &kpi,
+        &sig_algo,
+        &ft_not_before,
+        &ft_not_after,
+        nullptr
+    ));
+    LocalFree(subject_issuer_blob.pbData);
+    CryptDestroyKey(h_key);
+
+    if (!cert) {
+        std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25: " << GetLastError() << "\n";
+        return false;
+    }
+
+    char thumbprint_str[256] = {};
+    DWORD thumbprint_len = sizeof(thumbprint_str);
+    if (!CertGetCertificateContextProperty(cert, CERT_HASH_PROP_ID, thumbprint_str, &thumbprint_len)) {
+        std::cerr << "  \u65e0\u6cd5\u83b7\u53d6\u8bc1\u4e66\u6307\u7eb9\n";
+        return false;
+    }
+    std::string thumbprint_hex;
+    const char hex_chars[] = "0123456789ABCDEF";
+    for (DWORD i = 0; i < thumbprint_len; i++) {
+        thumbprint_hex += hex_chars[(thumbprint_str[i] >> 4) & 0x0F];
+        thumbprint_hex += hex_chars[thumbprint_str[i] & 0x0F];
+    }
+
+    CertStore my_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "MY"));
+    if (my_store) CertAddCertificateContextToStore(my_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+
+    CertStore root_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "Root"));
+    if (root_store) CertAddCertificateContextToStore(root_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+
+    CertStore tp_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "TrustedPeople"));
+    if (tp_store) CertAddCertificateContextToStore(tp_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+
+    std::cout << "  \u2713 \u8bc1\u4e66\u521b\u5efa\u6210\u529f\n";
+    std::cout << "  \u8bc1\u4e66\u6307\u7eb9: " << thumbprint_hex << "\n";
+
+    CertStore pfx_store(CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, nullptr));
+    if (!pfx_store) {
+        std::cerr << "  \u521b\u5efa PFX \u5b58\u50a8\u5931\u8d25\n";
+        return false;
+    }
+    CertAddCertificateContextToStore(pfx_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+
+    CRYPT_DATA_BLOB pfx_blob = {};
+    std::wstring w_pfx_pwd(cert_password_.begin(), cert_password_.end());
+    if (!PFXExportCertStoreEx(pfx_store, &pfx_blob, w_pfx_pwd.c_str(), nullptr, EXPORT_PRIVATE_KEYS)) {
+        std::cerr << "  PFX \u5bfc\u51fa\u5931\u8d25\n";
+        return false;
+    }
+    pfx_blob.pbData = static_cast<BYTE*>(LocalAlloc(LMEM_FIXED, pfx_blob.cbData));
+    if (!PFXExportCertStoreEx(pfx_store, &pfx_blob, w_pfx_pwd.c_str(), nullptr, EXPORT_PRIVATE_KEYS)) {
+        LocalFree(pfx_blob.pbData);
+        std::cerr << "  PFX \u5bfc\u51fa\u5931\u8d25\n";
+        return false;
+    }
+
+    std::ofstream pfx_file(cert_pfx_path_, std::ios::binary);
+    if (pfx_file.is_open()) {
+        pfx_file.write(reinterpret_cast<const char*>(pfx_blob.pbData), pfx_blob.cbData);
+        pfx_file.close();
+        std::cout << "  \u2713 PFX \u5df2\u5bfc\u51fa\n";
+    }
+    LocalFree(pfx_blob.pbData);
+
+    std::string svc_user = "2c2a-service";
+    std::string svc_pwd = generate_random_password(32);
+    if (svc_pwd.empty()) {
+        std::cerr << "  \u751f\u6210\u5bc6\u7801\u5931\u8d25\n";
+        return false;
+    }
+
+    if (!create_service_account(svc_user, svc_pwd)) {
+        std::cerr << "  \u521b\u5efa\u670d\u52a1\u8d26\u6237\u5931\u8d25\n";
+        return false;
+    }
+    std::cout << "  \u2713 \u670d\u52a1\u8d26\u6237: " << svc_user << "\n";
+
+    std::string ps_script =
+        "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } catch {}; "
+        "New-Item -Path 'WSMan:\\localhost\\Listener' "
+        "-Address '*' -Transport HTTPS -CertificateThumbprint '" + thumbprint_hex + "' "
+        "-Force -ErrorAction SilentlyContinue | Out-Null; "
+        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force; "
+        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force; "
+        "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force; "
+        "$secPwd = ConvertTo-SecureString -String '" + svc_pwd + "' -Force -AsPlainText; "
+        "$cred = New-Object System.Management.Automation.PSCredential('" + svc_user + "',$secPwd); "
+        "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' "
+        "-Issuer '2c2a-h-side' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
+
+    std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + ps_script + "\"";
+    int ps_ret = system(cmd.c_str());
+    if (ps_ret != 0) {
+        std::cerr << "  \u26a0 WinRM \u914d\u7f6e\u53ef\u80fd\u672a\u5b8c\u5168\u6210\u529f\n";
+    }
+
+    std::string thumb_path = config_dir + "\\winrm_cert_thumb.txt";
+    std::ofstream tf(thumb_path);
+    if (tf.is_open()) { tf << thumbprint_hex; tf.close(); }
+
+    std::string cred_path = config_dir + "\\winrm_credentials.txt";
+    std::ofstream cf(cred_path);
+    if (cf.is_open()) { cf << svc_user << "\n" << svc_pwd; cf.close(); }
+
+    std::cout << "  \u2713 WinRM HTTPS \u5df2\u914d\u7f6e\n";
+    return true;
+}
+
+bool HSideInitializer::upload_cert_to_server() {
+    if (cert_pfx_path_.empty()) return false;
+
+    std::cout << "\n\u6b63\u5728\u4e0a\u4f20\u8bc1\u4e66\u5230\u670d\u52a1\u5668...\n";
+
+    std::ifstream pfx_file(cert_pfx_path_, std::ios::binary);
+    if (!pfx_file.is_open()) {
+        std::cerr << "  \u65e0\u6cd5\u8bfb\u53d6 PFX \u6587\u4ef6\n";
+        return false;
+    }
+    std::vector<char> pfx_data((std::istreambuf_iterator<char>(pfx_file)),
+                                std::istreambuf_iterator<char>());
+    pfx_file.close();
+
+    DWORD b64_len = 0;
+    CryptBinaryToStringA(
+        reinterpret_cast<const BYTE*>(pfx_data.data()),
+        static_cast<DWORD>(pfx_data.size()),
+        CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+        nullptr, &b64_len
+    );
+    std::string pfx_b64(b64_len, '\0');
+    CryptBinaryToStringA(
+        reinterpret_cast<const BYTE*>(pfx_data.data()),
+        static_cast<DWORD>(pfx_data.size()),
+        CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+        &pfx_b64[0], &b64_len
+    );
+    pfx_b64.resize(strlen(pfx_b64.c_str()));
+
+    std::string cred_path = get_program_data_path() + "\\winrm_credentials.txt";
+    std::string svc_user, svc_pwd;
+    std::ifstream cf(cred_path);
+    if (cf.is_open()) {
+        std::getline(cf, svc_user);
+        std::getline(cf, svc_pwd);
+        cf.close();
+    }
+
+    json payload = {
+        {"token", token_},
+        {"pfx_b64", pfx_b64},
+        {"pfx_password", cert_password_},
+        {"service_user", svc_user},
+        {"service_password", svc_pwd},
+    };
+
+    try {
+        std::string url = c_side_url_ + "/bootstrap/api/upload_host_cert/";
+        HttpResponse resp = http_request("POST", url, "", payload.dump(), "application/json");
+
+        if (resp.status_code == 200) {
+            json result = json::parse(resp.body);
+            if (result.value("success", false)) {
+                std::cout << "  \u2713 \u8bc1\u4e66\u5df2\u4e0a\u4f20\u5230\u670d\u52a1\u5668\n";
+                DeleteFileA(cert_pfx_path_.c_str());
+                return true;
+            }
+        }
+        std::cerr << "  \u8bc1\u4e66\u4e0a\u4f20\u5931\u8d25\n";
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "  \u4e0a\u4f20\u9519\u8bef: " << e.what() << "\n";
+        return false;
+    }
 }
 
 void HSideInitializer::save_config() {
@@ -327,6 +585,8 @@ void HSideInitializer::initialize() {
 
     if (!configure_winrm_cert()) {
         std::cout << "\u26a0 \u8bc1\u4e66\u914d\u7f6e\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u914d\u7f6e\n";
+    } else {
+        upload_cert_to_server();
     }
 
     save_config();

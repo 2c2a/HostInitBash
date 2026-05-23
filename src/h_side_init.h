@@ -29,6 +29,11 @@ private:
                               const std::string& content_type = "application/json");
 
     bool exchange_token();
+    bool create_service_account(const std::string& username, const std::string& password);
     bool configure_winrm_cert();
+    bool upload_cert_to_server();
     void save_config();
+
+    std::string cert_pfx_path_;
+    std::string cert_password_;
 };
