@@ -301,7 +301,17 @@ bool HSideInitializer::create_service_account(const std::string& username, const
 
     DWORD err = 0;
     NET_API_STATUS status = NetUserAdd(nullptr, 1, reinterpret_cast<LPBYTE>(&ui), &err);
-    if (status != NERR_Success && status != NERR_UserExists) {
+    if (status == NERR_UserExists) {
+        USER_INFO_1003 ui_pwd = {};
+        ui_pwd.usri1003_password = const_cast<LPWSTR>(w_password.c_str());
+        if (NetUserSetInfo(nullptr, w_username.c_str(), 1003, reinterpret_cast<LPBYTE>(&ui_pwd), nullptr) != NERR_Success) {
+            std::cerr << "  \u66f4\u65b0\u7528\u6237\u5bc6\u7801\u5931\u8d25\n";
+            return false;
+        }
+        USER_INFO_1008 ui_flags = {};
+        ui_flags.usri1008_flags = UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT;
+        NetUserSetInfo(nullptr, w_username.c_str(), 1008, reinterpret_cast<LPBYTE>(&ui_flags), nullptr);
+    } else if (status != NERR_Success) {
         std::cerr << "  \u521b\u5efa\u7528\u6237\u5931\u8d25: " << status << "\n";
         return false;
     }
@@ -588,22 +598,27 @@ bool HSideInitializer::configure_winrm_cert() {
 
     std::string full_username = hostname_ + "\\" + svc_user;
 
-    std::string ps_script =
-        "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } catch {}; "
-        "Get-ChildItem 'WSMan:\\localhost\\Listener' | Where-Object { $_.Transport -eq 'HTTPS' } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue; "
-        "New-Item -Path 'WSMan:\\localhost\\Listener' "
-        "-Address '*' -Transport HTTPS -CertificateThumbprint '" + thumbprint_hex + "' "
-        "-Force | Out-Null; "
-        "if (Test-Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate') { Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force }; "
-        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force; "
-        "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force; "
-        "$secPwd = ConvertTo-SecureString -String '" + svc_pwd + "' -Force -AsPlainText; "
-        "$cred = New-Object System.Management.Automation.PSCredential('" + full_username + "',$secPwd); "
-        "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' "
-        "-Issuer '" + thumbprint_hex + "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
+    std::string ps_path = config_dir + "\\winrm_setup.ps1";
+    std::ofstream ps_file(ps_path);
+    if (!ps_file.is_open()) {
+        std::cerr << "  \u65e0\u6cd5\u521b\u5efa\u914d\u7f6e\u811a\u672c\n";
+        return false;
+    }
 
-    std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + ps_script + "\"";
+    ps_file << "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } catch {}\n";
+    ps_file << "Get-ChildItem 'WSMan:\\localhost\\Listener' | Where-Object { $_.Transport -eq 'HTTPS' } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue\n";
+    ps_file << "New-Item -Path 'WSMan:\\localhost\\Listener' -Address '*' -Transport HTTPS -CertificateThumbprint '" << thumbprint_hex << "' -Force | Out-Null\n";
+    ps_file << "if (Test-Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate') { Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force }\n";
+    ps_file << "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force\n";
+    ps_file << "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force\n";
+    ps_file << "$secPwd = ConvertTo-SecureString -String '" << svc_pwd << "' -Force -AsPlainText\n";
+    ps_file << "$cred = New-Object System.Management.Automation.PSCredential('" << full_username << "',$secPwd)\n";
+    ps_file << "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' -Issuer '" << thumbprint_hex << "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue\n";
+    ps_file.close();
+
+    std::string cmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + ps_path + "\"";
     int ps_ret = system(cmd.c_str());
+    DeleteFileA(ps_path.c_str());
     if (ps_ret != 0) {
         std::cerr << "  \u26a0 WinRM \u914d\u7f6e\u53ef\u80fd\u672a\u5b8c\u5168\u6210\u529f\n";
     }
