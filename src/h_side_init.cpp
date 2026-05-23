@@ -629,24 +629,18 @@ bool HSideInitializer::configure_winrm_cert() {
         std::cerr << "  \u26a0 WinRM \u670d\u52a1\u542f\u52a8\u5931\u8d25\n";
     }
 
-    system("winrm delete winrm/config/Listener?Address=*+Transport=HTTPS 2>nul");
-
-    std::string create_listener = "winrm create winrm/config/Listener?Address=*+Transport=HTTPS "
-        "@{Hostname=2c2a-h-side;CertificateThumbprint=" + thumbprint_hex + "}";
-    if (system(create_listener.c_str()) != 0) {
-        std::cerr << "  \u26a0 \u521b\u5efa HTTPS \u76d1\u542c\u5668\u5931\u8d25\n";
+    std::string bat_path = config_dir + "\\winrm_config.bat";
+    {
+        std::ofstream bat(bat_path);
+        bat << "winrm delete winrm/config/Listener?Address=*+Transport=HTTPS 2>nul\n";
+        bat << "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=\"2c2a-h-side\";CertificateThumbprint=\"" << thumbprint_hex << "\"}\n";
+        bat << "winrm set winrm/config/Service/Auth @{ClientCertificate=\"true\";Basic=\"true\"}\n";
+        bat << "winrm set winrm/config/Service @{AllowUnencrypted=\"false\"}\n";
+        bat << "netsh advfirewall firewall add rule name=\"WinRM HTTPS\" dir=in action=allow protocol=TCP localport=5986 2>nul\n";
+        bat << "winrm create winrm/config/Service/Auth/CertMapping?Issuer=" << thumbprint_hex << "+Subject=2c2a-h-side+URI=* @{UserName=\"" << full_username << "\";Password=\"" << svc_pwd << "\"}\n";
     }
-
-    system("winrm set winrm/config/Service/Auth @{ClientCertificate=true;Basic=true}");
-    system("winrm set winrm/config/Service @{AllowUnencrypted=false}");
-    system("netsh advfirewall firewall add rule name=\"WinRM HTTPS\" dir=in action=allow protocol=TCP localport=5986 2>nul");
-
-    std::string cert_map = "winrm create winrm/config/Service/Auth/CertMapping?"
-        "Issuer=" + thumbprint_hex + "+Subject=2c2a-h-side+URI=* "
-        "@{UserName=" + full_username + ";Password=" + svc_pwd + "}";
-    if (system(cert_map.c_str()) != 0) {
-        std::cerr << "  \u26a0 \u8bc1\u4e66\u6620\u5c04\u914d\u7f6e\u5931\u8d25\n";
-    }
+    system(bat_path.c_str());
+    DeleteFileA(bat_path.c_str());
 
     std::string thumb_path = config_dir + "\\winrm_cert_thumb.txt";
     std::ofstream tf(thumb_path);
