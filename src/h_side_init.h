@@ -7,7 +7,6 @@ public:
     explicit HSideInitializer(const std::string& secret);
 
     void initialize();
-    void print_info() const;
 
 private:
     std::string c_side_url_;
@@ -17,18 +16,19 @@ private:
     std::string hostname_;
     std::string ip_address_;
     std::string session_token_;
-    bool auto_register_;
 
-    std::string derive_totp_key();
-    std::string generate_and_display_totp();
-    std::string exchange_token();
-    void save_session_token(const std::string& session_token);
-    std::string activate_with_totp();
-    
-    bool ask_tunnel_installation();
-    bool download_tunnel_client(const std::string& arch);
-    bool install_tunnel_service(const std::string& tunnel_token, const std::string& gateway_url);
-    bool setup_tunnel();
-    
-    bool complete_auto_register();
+    struct HttpResponse {
+        int status_code;
+        std::string body;
+    };
+
+    HttpResponse http_request(const std::string& method,
+                              const std::string& url,
+                              const std::string& auth_token = "",
+                              const std::string& body = "",
+                              const std::string& content_type = "application/json");
+
+    bool wait_for_pairing();
+    bool exchange_token();
+    void save_config();
 };
