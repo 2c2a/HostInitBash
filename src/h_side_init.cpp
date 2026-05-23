@@ -397,6 +397,52 @@ bool HSideInitializer::configure_winrm_cert() {
     CRYPT_ALGORITHM_IDENTIFIER sig_algo = {};
     sig_algo.pszObjId = szOID_RSA_SHA256RSA;
 
+    LPSTR szOidServerAuth = const_cast<LPSTR>(szOID_PKIX_KP_SERVER_AUTH);
+    CERT_ENHKEY_USAGE ekUsage = {};
+    ekUsage.cUsageIdentifier = 1;
+    ekUsage.rgpszUsageIdentifier = &szOidServerAuth;
+
+    CERT_BASIC_CONSTRAINTS2_INFO bc2 = {};
+    bc2.fCA = FALSE;
+    bc2.fPathLenConstraint = FALSE;
+
+    CRYPT_DATA_BLOB bc_blob = {};
+    if (!CryptEncodeObjectEx(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                             X509_BASIC_CONSTRAINTS2,
+                             &bc2, 0, nullptr, nullptr, &bc_blob.cbData)) {
+        CryptDestroyKey(h_key);
+        LocalFree(subject_issuer_blob.pbData);
+        return false;
+    }
+    bc_blob.pbData = static_cast<BYTE*>(LocalAlloc(LMEM_FIXED, bc_blob.cbData));
+    CryptEncodeObjectEx(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                        X509_BASIC_CONSTRAINTS2,
+                        &bc2, 0, nullptr, bc_blob.pbData, &bc_blob.cbData);
+
+    CERT_EXTENSION extensions[2] = {};
+    extensions[0].pszObjId = szOID_ENHANCED_KEY_USAGE;
+    extensions[0].fCritical = TRUE;
+    extensions[0].Value.cbData = 0;
+    extensions[0].Value.pbData = nullptr;
+    if (!CryptEncodeObjectEx(X509_ASN_ENCODING, szOID_ENHANCED_KEY_USAGE,
+                             &ekUsage, 0, nullptr, nullptr, &extensions[0].Value.cbData)) {
+        LocalFree(bc_blob.pbData);
+        CryptDestroyKey(h_key);
+        LocalFree(subject_issuer_blob.pbData);
+        return false;
+    }
+    extensions[0].Value.pbData = static_cast<BYTE*>(LocalAlloc(LMEM_FIXED, extensions[0].Value.cbData));
+    CryptEncodeObjectEx(X509_ASN_ENCODING, szOID_ENHANCED_KEY_USAGE,
+                        &ekUsage, 0, nullptr, extensions[0].Value.pbData, &extensions[0].Value.cbData);
+
+    extensions[1].pszObjId = szOID_BASIC_CONSTRAINTS2;
+    extensions[1].fCritical = TRUE;
+    extensions[1].Value = bc_blob;
+
+    CERT_EXTENSIONS cert_exts = {};
+    cert_exts.cExtension = 2;
+    cert_exts.rgExtension = extensions;
+
     SYSTEMTIME st_not_before = {};
     GetSystemTime(&st_not_before);
     SYSTEMTIME st_not_after = st_not_before;
@@ -414,7 +460,7 @@ bool HSideInitializer::configure_winrm_cert() {
         &sig_algo,
         &st_not_before,
         &st_not_after,
-        nullptr
+        &cert_exts
     );
 
     if (!raw_cert) {
@@ -433,7 +479,7 @@ bool HSideInitializer::configure_winrm_cert() {
             &sig_algo,
             &st_not_before,
             &st_not_after,
-            nullptr
+            &cert_exts
         );
 
         if (!raw_cert) {
@@ -441,6 +487,8 @@ bool HSideInitializer::configure_winrm_cert() {
             std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25(pKeyProvInfo=NULL): " << err2 << " (0x" << std::hex << err2 << std::dec << ")\n";
             LocalFree(subject_issuer_blob.pbData);
             CryptDestroyKey(h_key);
+            LocalFree(extensions[0].Value.pbData);
+            LocalFree(bc_blob.pbData);
             return false;
         }
 
@@ -460,6 +508,8 @@ bool HSideInitializer::configure_winrm_cert() {
     CertCtx cert(raw_cert);
     LocalFree(subject_issuer_blob.pbData);
     CryptDestroyKey(h_key);
+    LocalFree(extensions[0].Value.pbData);
+    LocalFree(bc_blob.pbData);
 
     if (debug_) {
         std::cout << "  [DEBUG] \u8bc1\u4e66\u521b\u5efa\u6210\u529f\n";
@@ -547,7 +597,7 @@ bool HSideInitializer::configure_winrm_cert() {
         "$secPwd = ConvertTo-SecureString -String '" + svc_pwd + "' -Force -AsPlainText; "
         "$cred = New-Object System.Management.Automation.PSCredential('" + svc_user + "',$secPwd); "
         "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' "
-        "-Issuer '2c2a-h-side' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
+        "-Issuer '" + thumbprint_hex + "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
 
     std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + ps_script + "\"";
     int ps_ret = system(cmd.c_str());
