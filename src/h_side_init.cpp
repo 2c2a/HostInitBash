@@ -159,7 +159,7 @@ struct CryptProv {
 } // anonymous namespace
 
 
-HSideInitializer::HSideInitializer(const std::string& secret) {
+HSideInitializer::HSideInitializer(const std::string& secret, bool debug) : debug_(debug) {
     try {
         std::string decoded_str = base64_decode(secret);
         json decoded = json::parse(decoded_str);
@@ -326,18 +326,47 @@ bool HSideInitializer::configure_winrm_cert() {
     cert_pfx_path_ = config_dir + "\\cert.pfx";
     cert_password_ = "2c2acert";
 
+    if (debug_) {
+        BOOL is_admin = IsUserAnAdmin();
+        std::cout << "  [DEBUG] \u8fd0\u884c\u4e3a\u7ba1\u7406\u5458: " << (is_admin ? "\u662f" : "\u5426!") << "\n";
+    }
+
     { HCRYPTPROV h_tmp = 0; CryptAcquireContextW(&h_tmp, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_DELETEKEYSET); }
+    if (debug_) std::cout << "  [DEBUG] \u5df2\u6e05\u7406\u65e7\u5bc6\u94a5\u5bb9\u5668\n";
 
     CryptProv crypt_prov;
     if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_NEWKEYSET)) {
-        std::cerr << "  CryptAcquireContext \u5931\u8d25: " << GetLastError() << "\n";
+        DWORD err = GetLastError();
+        std::cerr << "  CryptAcquireContext \u5931\u8d25: " << err << " (0x" << std::hex << err << std::dec << ")\n";
+        if (err == 0x80090016) std::cerr << "  -> \u5bc6\u94a5\u5bb9\u5668\u4e0d\u5b58\u5728/\u65e0\u6743\u9650\u521b\u5efa\n";
+        if (err == 0x8009000F) std::cerr << "  -> \u5bc6\u94a5\u5bb9\u5668\u5df2\u5b58\u5728\n";
         return false;
     }
+    if (debug_) std::cout << "  [DEBUG] CryptAcquireContext \u6210\u529f, handle=" << crypt_prov.handle << "\n";
 
     HCRYPTKEY h_key = 0;
     if (!CryptGenKey(crypt_prov.handle, AT_KEYEXCHANGE, 0x08000000 | CRYPT_EXPORTABLE, &h_key)) {
-        std::cerr << "  CryptGenKey \u5931\u8d25: " << GetLastError() << "\n";
+        DWORD err = GetLastError();
+        std::cerr << "  CryptGenKey \u5931\u8d25: " << err << " (0x" << std::hex << err << std::dec << ")\n";
         return false;
+    }
+    if (debug_) std::cout << "  [DEBUG] CryptGenKey AT_KEYEXCHANGE \u6210\u529f, key=" << h_key << "\n";
+
+    if (debug_) {
+        HCRYPTPROV h_verify = 0;
+        if (CryptAcquireContextW(&h_verify, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET)) {
+            HCRYPTKEY h_vk = 0;
+            if (CryptGetUserKey(h_verify, AT_KEYEXCHANGE, &h_vk)) {
+                std::cout << "  [DEBUG] \u9a8c\u8bc1: AT_KEYEXCHANGE \u5bc6\u94a5\u5b58\u5728\n";
+                CryptDestroyKey(h_vk);
+            } else {
+                DWORD e = GetLastError();
+                std::cout << "  [DEBUG] \u9a8c\u8bc1: AT_KEYEXCHANGE \u5bc6\u94a5\u4e0d\u5b58\u5728! err=" << e << "\n";
+            }
+            CryptReleaseContext(h_verify, 0);
+        } else {
+            std::cout << "  [DEBUG] \u9a8c\u8bc1: \u65e0\u6cd5\u91cd\u65b0\u6253\u5f00\u5bc6\u94a5\u5bb9\u5668, err=" << GetLastError() << "\n";
+        }
     }
 
     CERT_NAME_BLOB subject_issuer_blob = {};
@@ -358,6 +387,13 @@ bool HSideInitializer::configure_winrm_cert() {
     kpi.cProvParam = 0;
     kpi.dwKeySpec = AT_KEYEXCHANGE;
 
+    if (debug_) {
+        std::wcout << L"  [DEBUG] KPI: Container=" << kpi.pwszContainerName
+                   << L" ProvType=" << kpi.dwProvType
+                   << L" Flags=0x" << std::hex << kpi.dwFlags << std::dec
+                   << L" KeySpec=" << kpi.dwKeySpec << L"\n";
+    }
+
     CRYPT_ALGORITHM_IDENTIFIER sig_algo = {};
     sig_algo.pszObjId = szOID_RSA_SHA256RSA;
 
@@ -365,6 +401,10 @@ bool HSideInitializer::configure_winrm_cert() {
     GetSystemTime(&st_not_before);
     SYSTEMTIME st_not_after = st_not_before;
     st_not_after.wYear += 5;
+
+    if (debug_) {
+        std::cout << "  [DEBUG] \u5c1d\u8bd5 CertCreateSelfSignCertificate (pKeyProvInfo=\u975e\u7a7a)...\n";
+    }
 
     CertCtx cert(CertCreateSelfSignCertificate(
         crypt_prov.handle,
@@ -376,12 +416,52 @@ bool HSideInitializer::configure_winrm_cert() {
         &st_not_after,
         nullptr
     ));
+
+    if (!cert) {
+        DWORD err = GetLastError();
+        std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25(pKeyProvInfo\u975e\u7a7a): " << err << " (0x" << std::hex << err << std::dec << ")\n";
+
+        if (debug_) {
+            std::cout << "  [DEBUG] \u5c1d\u8bd5\u5907\u7528\u65b9\u6848: pKeyProvInfo=NULL ...\n";
+        }
+
+        cert = CertCtx(CertCreateSelfSignCertificate(
+            crypt_prov.handle,
+            &subject_issuer_blob,
+            0,
+            nullptr,
+            &sig_algo,
+            &st_not_before,
+            &st_not_after,
+            nullptr
+        ));
+
+        if (!cert) {
+            DWORD err2 = GetLastError();
+            std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25(pKeyProvInfo=NULL): " << err2 << " (0x" << std::hex << err2 << std::dec << ")\n";
+            LocalFree(subject_issuer_blob.pbData);
+            CryptDestroyKey(h_key);
+            return false;
+        }
+
+        if (debug_) {
+            std::cout << "  [DEBUG] \u5907\u7528\u65b9\u6848\u6210\u529f, \u624b\u52a8\u8bbe\u7f6e CERT_KEY_PROV_INFO_PROP_ID\n";
+        }
+
+        CRYPT_DATA_BLOB kpi_blob = {};
+        kpi_blob.cbData = sizeof(CRYPT_KEY_PROV_INFO);
+        kpi_blob.pbData = reinterpret_cast<BYTE*>(&kpi);
+        if (!CertSetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi_blob)) {
+            DWORD perr = GetLastError();
+            std::cerr << "  \u26a0 CertSetCertificateContextProperty \u5931\u8d25: " << perr << "\n";
+        }
+    }
+
     LocalFree(subject_issuer_blob.pbData);
     CryptDestroyKey(h_key);
 
-    if (!cert) {
-        std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25: " << GetLastError() << "\n";
-        return false;
+    if (debug_) {
+        std::cout << "  [DEBUG] \u8bc1\u4e66\u521b\u5efa\u6210\u529f\n";
     }
 
     char thumbprint_str[256] = {};
@@ -399,12 +479,15 @@ bool HSideInitializer::configure_winrm_cert() {
 
     CertStore my_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "MY"));
     if (my_store) CertAddCertificateContextToStore(my_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+    else if (debug_) std::cout << "  [DEBUG] \u65e0\u6cd5\u6253\u5f00 MY \u5b58\u50a8\u533a\n";
 
     CertStore root_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "Root"));
     if (root_store) CertAddCertificateContextToStore(root_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+    else if (debug_) std::cout << "  [DEBUG] \u65e0\u6cd5\u6253\u5f00 Root \u5b58\u50a8\u533a\n";
 
     CertStore tp_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "TrustedPeople"));
     if (tp_store) CertAddCertificateContextToStore(tp_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+    else if (debug_) std::cout << "  [DEBUG] \u65e0\u6cd5\u6253\u5f00 TrustedPeople \u5b58\u50a8\u533a\n";
 
     std::cout << "  \u2713 \u8bc1\u4e66\u521b\u5efa\u6210\u529f\n";
     std::cout << "  \u8bc1\u4e66\u6307\u7eb9: " << thumbprint_hex << "\n";
@@ -419,7 +502,9 @@ bool HSideInitializer::configure_winrm_cert() {
     CRYPT_DATA_BLOB pfx_blob = {};
     std::wstring w_pfx_pwd(cert_password_.begin(), cert_password_.end());
     if (!PFXExportCertStoreEx(pfx_store, &pfx_blob, w_pfx_pwd.c_str(), nullptr, EXPORT_PRIVATE_KEYS)) {
-        std::cerr << "  PFX \u5bfc\u51fa\u5931\u8d25\n";
+        DWORD pfx_err = GetLastError();
+        std::cerr << "  PFX \u5bfc\u51fa\u5931\u8d25: " << pfx_err << " (0x" << std::hex << pfx_err << std::dec << ")\n";
+        if (debug_) std::cout << "  [DEBUG] \u53ef\u80fd\u662f\u79c1\u94a5\u672a\u6b63\u786e\u5173\u8054\u5230\u8bc1\u4e66\n";
         return false;
     }
     pfx_blob.pbData = static_cast<BYTE*>(LocalAlloc(LMEM_FIXED, pfx_blob.cbData));

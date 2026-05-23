@@ -4,11 +4,12 @@
 
 class HSideInitializer {
 public:
-    explicit HSideInitializer(const std::string& secret);
+    explicit HSideInitializer(const std::string& secret, bool debug = false);
 
     void initialize();
 
 private:
+    bool debug_ = false;
     std::string c_side_url_;
     std::string token_;
     std::string host_id_;

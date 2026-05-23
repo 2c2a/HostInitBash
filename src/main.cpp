@@ -11,13 +11,17 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
 
     std::string secret;
+    bool debug = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: h_side_init <secret>\n";
+            std::cout << "Usage: h_side_init <secret> [--debug]\n";
             std::cout << "  secret  \u4ece C \u7aef\u83b7\u53d6\u7684\u52a0\u5bc6\u914d\u7f6e\u5b57\u7b26\u4e32\n";
+            std::cout << "  --debug \u8f93\u51fa\u8be6\u7ec6\u8c03\u8bd5\u65e5\u5fd7\n";
             return 0;
+        } else if (arg == "--debug") {
+            debug = true;
         } else if (arg[0] != '-') {
             secret = arg;
         }
@@ -31,12 +35,12 @@ int main(int argc, char* argv[]) {
 
     if (secret.empty()) {
         std::cerr << "\u9519\u8bef: \u5fc5\u987b\u63d0\u4f9b secret \u53c2\u6570\n";
-        std::cerr << "Usage: h_side_init <secret>\n";
+        std::cerr << "Usage: h_side_init <secret> [--debug]\n";
         return 1;
     }
 
     try {
-        HSideInitializer initializer(secret);
+        HSideInitializer initializer(secret, debug);
         initializer.initialize();
     } catch (const std::exception& e) {
         std::cerr << "\u521d\u59cb\u5316\u9519\u8bef: " << e.what() << "\n";
