@@ -588,14 +588,16 @@ bool HSideInitializer::configure_winrm_cert() {
 
     std::string ps_script =
         "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } catch {}; "
+        "Get-ChildItem 'WSMan:\\localhost\\Listener' | Where-Object { $_.Transport -eq 'HTTPS' } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue; "
         "New-Item -Path 'WSMan:\\localhost\\Listener' "
         "-Address '*' -Transport HTTPS -CertificateThumbprint '" + thumbprint_hex + "' "
-        "-Force -ErrorAction SilentlyContinue | Out-Null; "
+        "-Force | Out-Null; "
         "if (Test-Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate') { Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\ClientCertificate' -Value $true -Force }; "
         "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' -Value $true -Force; "
         "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' -Value $false -Force; "
+        "$hostname = [System.Net.Dns]::GetHostName(); "
         "$secPwd = ConvertTo-SecureString -String '" + svc_pwd + "' -Force -AsPlainText; "
-        "$cred = New-Object System.Management.Automation.PSCredential('.\\" + svc_user + "',$secPwd); "
+        "$cred = New-Object System.Management.Automation.PSCredential(\"$hostname\\" + svc_user + "\",$secPwd); "
         "New-Item -Path WSMan:\\localhost\\ClientCertificate -Subject '2c2a-h-side' "
         "-Issuer '" + thumbprint_hex + "' -URI * -Credential $cred -Force -ErrorAction SilentlyContinue";
 
