@@ -705,6 +705,11 @@ bool HSideInitializer::upload_cert_to_server() {
         std::string url = c_side_url_ + "/bootstrap/api/upload_host_cert/";
         HttpResponse resp = http_request("POST", url, "", payload.dump(), "application/json");
 
+        if (debug_) {
+            std::cout << "  [DEBUG] upload status=" << resp.status_code << "\n";
+            std::cout << "  [DEBUG] upload body=" << resp.body.substr(0, 500) << "\n";
+        }
+
         if (resp.status_code == 200) {
             json result = json::parse(resp.body);
             if (result.value("success", false)) {
@@ -713,7 +718,8 @@ bool HSideInitializer::upload_cert_to_server() {
                 return true;
             }
         }
-        std::cerr << "  \u8bc1\u4e66\u4e0a\u4f20\u5931\u8d25\n";
+        std::cerr << "  \u8bc1\u4e66\u4e0a\u4f20\u5931\u8d25 (HTTP " << resp.status_code << ")\n";
+        if (!resp.body.empty()) std::cerr << "  " << resp.body.substr(0, 200) << "\n";
         return false;
     } catch (const std::exception& e) {
         std::cerr << "  \u4e0a\u4f20\u9519\u8bef: " << e.what() << "\n";
