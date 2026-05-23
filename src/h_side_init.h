@@ -29,5 +29,6 @@ private:
                               const std::string& content_type = "application/json");
 
     bool exchange_token();
+    bool configure_winrm_cert();
     void save_config();
 };

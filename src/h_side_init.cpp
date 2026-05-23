@@ -235,6 +235,66 @@ bool HSideInitializer::exchange_token() {
     return false;
 }
 
+bool HSideInitializer::configure_winrm_cert() {
+    std::cout << "\n\u6b63\u5728\u914d\u7f6e WinRM \u8bc1\u4e66...\n";
+
+    std::string ps_script =
+        "$cert = New-SelfSignedCertificate -DnsName '2c2a-h-side' "
+        "-CertStoreLocation 'Cert:\\LocalMachine\\My' "
+        "-FriendlyName '2c2a WinRM' -NotAfter (Get-Date).AddYears(5); "
+        "if (-not $cert) { exit 1 }; "
+        "$thumb = $cert.Thumbprint; "
+        "New-Item -Path 'WSMan:\\localhost\\Listener' "
+        "-Address '*' -Transport HTTPS -CertificateThumbprint $thumb "
+        "-Force -ErrorAction SilentlyContinue | Out-Null; "
+        "try { Enable-PSRemoting -Force -ErrorAction Stop | Out-Null } "
+        "catch {}; "
+        "Set-Item -Path 'WSMan:\\localhost\\Service\\Auth\\Basic' "
+        "-Value $true -Force; "
+        "Set-Item -Path 'WSMan:\\localhost\\Service\\AllowUnencrypted' "
+        "-Value $false -Force; "
+        "Write-Output $thumb";
+
+    std::string cmd = "powershell -NoProfile -NonInteractive -Command \""
+        + ps_script + "\"";
+
+    FILE* pipe = _popen(cmd.c_str(), "r");
+    if (!pipe) {
+        std::cerr << "  \u65e0\u6cd5\u6267\u884c PowerShell\n";
+        return false;
+    }
+
+    char buffer[256] = {};
+    std::string thumbprint;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        std::string line(buffer);
+        size_t start = line.find_first_not_of(" \t\r\n");
+        size_t end = line.find_last_not_of(" \t\r\n");
+        if (start != std::string::npos && end != std::string::npos) {
+            thumbprint = line.substr(start, end - start + 1);
+        }
+    }
+    int ret = _pclose(pipe);
+
+    if (ret != 0 || thumbprint.empty()) {
+        std::cerr << "  \u8bc1\u4e66\u521b\u5efa\u5931\u8d25\n";
+        return false;
+    }
+
+    std::cout << "  \u2713 WinRM HTTPS \u8bc1\u4e66\u5df2\u914d\u7f6e\n";
+    std::cout << "  \u8bc1\u4e66\u6307\u7eb9: " << thumbprint << "\n";
+
+    std::string config_dir = get_program_data_path();
+    std::string cert_path = config_dir + "\\winrm_cert_thumb.txt";
+    std::ofstream f(cert_path);
+    if (f.is_open()) {
+        f << thumbprint;
+        f.close();
+    }
+
+    return true;
+}
+
 void HSideInitializer::save_config() {
     std::string config_dir = get_program_data_path();
     CreateDirectoryA(config_dir.c_str(), nullptr);
@@ -264,6 +324,10 @@ void HSideInitializer::initialize() {
     std::cout << std::string(50, '=') << "\n";
 
     if (!exchange_token()) return;
+
+    if (!configure_winrm_cert()) {
+        std::cout << "\u26a0 \u8bc1\u4e66\u914d\u7f6e\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u914d\u7f6e\n";
+    }
 
     save_config();
 
