@@ -406,7 +406,7 @@ bool HSideInitializer::configure_winrm_cert() {
         std::cout << "  [DEBUG] \u5c1d\u8bd5 CertCreateSelfSignCertificate (pKeyProvInfo=\u975e\u7a7a)...\n";
     }
 
-    CertCtx cert(CertCreateSelfSignCertificate(
+    PCCERT_CONTEXT raw_cert = CertCreateSelfSignCertificate(
         crypt_prov.handle,
         &subject_issuer_blob,
         0,
@@ -415,9 +415,9 @@ bool HSideInitializer::configure_winrm_cert() {
         &st_not_before,
         &st_not_after,
         nullptr
-    ));
+    );
 
-    if (!cert) {
+    if (!raw_cert) {
         DWORD err = GetLastError();
         std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25(pKeyProvInfo\u975e\u7a7a): " << err << " (0x" << std::hex << err << std::dec << ")\n";
 
@@ -425,7 +425,7 @@ bool HSideInitializer::configure_winrm_cert() {
             std::cout << "  [DEBUG] \u5c1d\u8bd5\u5907\u7528\u65b9\u6848: pKeyProvInfo=NULL ...\n";
         }
 
-        cert = CertCtx(CertCreateSelfSignCertificate(
+        raw_cert = CertCreateSelfSignCertificate(
             crypt_prov.handle,
             &subject_issuer_blob,
             0,
@@ -434,9 +434,9 @@ bool HSideInitializer::configure_winrm_cert() {
             &st_not_before,
             &st_not_after,
             nullptr
-        ));
+        );
 
-        if (!cert) {
+        if (!raw_cert) {
             DWORD err2 = GetLastError();
             std::cerr << "  CertCreateSelfSignCertificate \u5931\u8d25(pKeyProvInfo=NULL): " << err2 << " (0x" << std::hex << err2 << std::dec << ")\n";
             LocalFree(subject_issuer_blob.pbData);
@@ -451,12 +451,13 @@ bool HSideInitializer::configure_winrm_cert() {
         CRYPT_DATA_BLOB kpi_blob = {};
         kpi_blob.cbData = sizeof(CRYPT_KEY_PROV_INFO);
         kpi_blob.pbData = reinterpret_cast<BYTE*>(&kpi);
-        if (!CertSetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi_blob)) {
+        if (!CertSetCertificateContextProperty(raw_cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi_blob)) {
             DWORD perr = GetLastError();
             std::cerr << "  \u26a0 CertSetCertificateContextProperty \u5931\u8d25: " << perr << "\n";
         }
     }
 
+    CertCtx cert(raw_cert);
     LocalFree(subject_issuer_blob.pbData);
     CryptDestroyKey(h_key);
 
