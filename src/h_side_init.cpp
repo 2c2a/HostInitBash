@@ -120,8 +120,8 @@ HSideInitializer::HSideInitializer(const std::string& secret) {
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("Secret \u89e3\u7801\u5931\u8d25\uff1a") + e.what());
     }
-    if (c_side_url_.empty() || token_.empty() || host_id_.empty() || host_id_ == "0") {
-        throw std::runtime_error("Secret \u7f3a\u5c11\u5fc5\u8981\u5b57\u6bb5(c_side_url/token/host_id)");
+    if (c_side_url_.empty() || token_.empty()) {
+        throw std::runtime_error("Secret \u7f3a\u5c11\u5fc5\u8981\u5b57\u6bb5(c_side_url/token)");
     }
 }
 
