@@ -21,6 +21,7 @@
 #include <wincrypt.h>
 #include <lm.h>
 #include <winsvc.h>
+#include <aclapi.h>
 
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "netapi32.lib")
@@ -156,6 +157,65 @@ struct CryptProv {
     CryptProv& operator=(const CryptProv&) = delete;
     explicit operator bool() const { return handle != 0; }
 };
+
+static void remove_existing_certs() {
+    const char* store_names[] = {"MY", "Root", "TrustedPeople"};
+    for (const char* sn : store_names) {
+        CertStore store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, sn));
+        if (!store) continue;
+        while (true) {
+            PCCERT_CONTEXT p = CertFindCertificateInStore(store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SUBJECT_STR_A, "2c2a-h-side", nullptr);
+            if (!p) break;
+            CertDeleteCertificateFromStore(p);
+        }
+    }
+}
+
+static bool grant_network_service_key_access(HCRYPTPROV hProv) {
+    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    PSID pSid = nullptr;
+    if (!AllocateAndInitializeSid(&ntAuth, 2, SECURITY_NETWORK_SERVICE_RID, 0, 0, 0, 0, 0, 0, 0, &pSid)) return false;
+
+    EXPLICIT_ACCESSA ea = {};
+    ea.grfAccessPermissions = GENERIC_READ;
+    ea.grfAccessMode = GRANT_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(pSid);
+
+    DWORD cbSD = 0;
+    CryptGetProvParam(hProv, PP_KEYSET_SEC_DESCR, nullptr, &cbSD, DACL_SECURITY_INFORMATION);
+    if (cbSD == 0) { FreeSid(pSid); return false; }
+
+    std::vector<BYTE> sdBuf(cbSD);
+    if (!CryptGetProvParam(hProv, PP_KEYSET_SEC_DESCR, sdBuf.data(), &cbSD, DACL_SECURITY_INFORMATION)) {
+        FreeSid(pSid);
+        return false;
+    }
+
+    BOOL bDaclPresent = FALSE;
+    BOOL bDaclDefaulted = FALSE;
+    PACL pOldDacl = nullptr;
+    GetSecurityDescriptorDacl(reinterpret_cast<PSECURITY_DESCRIPTOR>(sdBuf.data()), &bDaclPresent, &pOldDacl, &bDaclDefaulted);
+
+    PACL pNewDacl = nullptr;
+    if (SetEntriesInAclA(1, &ea, bDaclPresent ? pOldDacl : nullptr, &pNewDacl) != ERROR_SUCCESS) {
+        FreeSid(pSid);
+        return false;
+    }
+
+    SECURITY_DESCRIPTOR newSD = {};
+    InitializeSecurityDescriptor(&newSD, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&newSD, TRUE, pNewDacl, FALSE);
+
+    BOOL result = CryptSetProvParam(hProv, PP_KEYSET_SEC_DESCR, reinterpret_cast<BYTE*>(&newSD), DACL_SECURITY_INFORMATION);
+
+    LocalFree(pNewDacl);
+    FreeSid(pSid);
+
+    return result != FALSE;
+}
 
 static bool ensure_winrm_service() {
     SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -367,6 +427,9 @@ bool HSideInitializer::configure_winrm_cert() {
         std::cout << "  [DEBUG] \u8fd0\u884c\u4e3a\u7ba1\u7406\u5458: " << (is_admin ? "\u662f" : "\u5426!") << "\n";
     }
 
+    remove_existing_certs();
+    if (debug_) std::cout << "  [DEBUG] \u5df2\u6e05\u7406\u65e7\u8bc1\u4e66\n";
+
     { HCRYPTPROV h_tmp = 0; CryptAcquireContextW(&h_tmp, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_DELETEKEYSET); }
     if (debug_) std::cout << "  [DEBUG] \u5df2\u6e05\u7406\u65e7\u5bc6\u94a5\u5bb9\u5668\n";
 
@@ -565,6 +628,12 @@ bool HSideInitializer::configure_winrm_cert() {
     if (my_store) CertAddCertificateContextToStore(my_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
     else if (debug_) std::cout << "  [DEBUG] \u65e0\u6cd5\u6253\u5f00 MY \u5b58\u50a8\u533a\n";
 
+    if (grant_network_service_key_access(crypt_prov.handle)) {
+        std::cout << "  \u2713 NETWORK SERVICE \u5df2\u83b7\u5f97\u79c1\u94a5\u8bbf\u95ee\u6743\u9650\n";
+    } else {
+        if (debug_) std::cout << "  [DEBUG] \u6388\u4e88 NETWORK SERVICE \u79c1\u94a5\u8bbf\u95ee\u6743\u9650\u5931\u8d25\n";
+    }
+
     CertStore root_store(CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0, CERT_SYSTEM_STORE_LOCAL_MACHINE, "Root"));
     if (root_store) CertAddCertificateContextToStore(root_store, cert, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
     else if (debug_) std::cout << "  [DEBUG] \u65e0\u6cd5\u6253\u5f00 Root \u5b58\u50a8\u533a\n";
@@ -631,6 +700,7 @@ bool HSideInitializer::configure_winrm_cert() {
         std::ofstream bat(bat_path);
         bat << "winrm quickconfig -quiet 2>nul\n";
         bat << "timeout /t 3 /nobreak >nul 2>&1\n";
+        bat << "certutil -repairstore My \"" << thumbprint_hex << "\" >nul 2>&1\n";
         bat << "winrm delete winrm/config/Listener?Address=*+Transport=HTTPS 2>nul\n";
         bat << "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=\"2c2a-h-side\";CertificateThumbprint=\"" << thumbprint_hex << "\"}\n";
         bat << "winrm set winrm/config/Service/Auth @{ClientCertificate=\"true\";Basic=\"true\"}\n";
