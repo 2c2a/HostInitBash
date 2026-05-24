@@ -532,10 +532,7 @@ bool HSideInitializer::configure_winrm_cert() {
             std::cout << "  [DEBUG] \u5907\u7528\u65b9\u6848\u6210\u529f, \u624b\u52a8\u8bbe\u7f6e CERT_KEY_PROV_INFO_PROP_ID\n";
         }
 
-        CRYPT_DATA_BLOB kpi_blob = {};
-        kpi_blob.cbData = sizeof(CRYPT_KEY_PROV_INFO);
-        kpi_blob.pbData = reinterpret_cast<BYTE*>(&kpi);
-        if (!CertSetCertificateContextProperty(raw_cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi_blob)) {
+        if (!CertSetCertificateContextProperty(raw_cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi)) {
             DWORD perr = GetLastError();
             std::cerr << "  \u26a0 CertSetCertificateContextProperty \u5931\u8d25: " << perr << "\n";
         }
@@ -632,6 +629,8 @@ bool HSideInitializer::configure_winrm_cert() {
     std::string bat_path = config_dir + "\\winrm_config.bat";
     {
         std::ofstream bat(bat_path);
+        bat << "winrm quickconfig -quiet 2>nul\n";
+        bat << "timeout /t 3 /nobreak >nul 2>&1\n";
         bat << "winrm delete winrm/config/Listener?Address=*+Transport=HTTPS 2>nul\n";
         bat << "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=\"2c2a-h-side\";CertificateThumbprint=\"" << thumbprint_hex << "\"}\n";
         bat << "winrm set winrm/config/Service/Auth @{ClientCertificate=\"true\";Basic=\"true\"}\n";
@@ -642,6 +641,46 @@ bool HSideInitializer::configure_winrm_cert() {
     }
     system(bat_path.c_str());
     DeleteFileA(bat_path.c_str());
+
+    {
+        std::string verify_bat = config_dir + "\\winrm_verify.bat";
+        std::string verify_out = config_dir + "\\winrm_verify.txt";
+        {
+            std::ofstream vb(verify_bat);
+            vb << "winrm enumerate winrm/config/Listener > \"" << verify_out << "\" 2>&1\n";
+        }
+        system(verify_bat.c_str());
+        DeleteFileA(verify_bat.c_str());
+
+        std::ifstream vf(verify_out);
+        bool https_found = false;
+        if (vf.is_open()) {
+            std::string line;
+            while (std::getline(vf, line)) {
+                if (line.find("HTTPS") != std::string::npos) {
+                    https_found = true;
+                    break;
+                }
+            }
+            vf.close();
+        }
+        DeleteFileA(verify_out.c_str());
+
+        if (!https_found) {
+            std::cerr << "  \u26a0 HTTPS \u76d1\u542c\u5668\u672a\u521b\u5efa\uff0c\u6b63\u5728\u91cd\u8bd5...\n";
+            std::string retry_bat = config_dir + "\\winrm_retry.bat";
+            {
+                std::ofstream rb(retry_bat);
+                rb << "winrm quickconfig -quiet 2>nul\n";
+                rb << "timeout /t 2 /nobreak >nul 2>&1\n";
+                rb << "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=\"2c2a-h-side\";CertificateThumbprint=\"" << thumbprint_hex << "\"}\n";
+            }
+            system(retry_bat.c_str());
+            DeleteFileA(retry_bat.c_str());
+        } else {
+            std::cout << "  \u2713 HTTPS \u76d1\u542c\u5668\u5df2\u521b\u5efa\n";
+        }
+    }
 
     std::cout << "  \u6b63\u5728\u91cd\u542f WinRM \u670d\u52a1\u4ee5\u542f\u7528 HTTPS \u76d1\u542c...\n";
     {
@@ -706,7 +745,11 @@ bool HSideInitializer::configure_winrm_cert() {
             if (port_open) {
                 std::cout << "  \u2713 WinRM HTTPS \u7aef\u53e3 5986 \u5df2\u5f00\u653e\n";
             } else {
-                std::cerr << "  \u26a0 WinRM HTTPS \u7aef\u53e3 5986 \u672a\u5f00\u653e\uff0c\u8bf7\u68c0\u67e5\u914d\u7f6e\n";
+                std::cerr << "  \u26a0 WinRM HTTPS \u7aef\u53e3 5986 \u672a\u5f00\u653e\n";
+                std::cerr << "  \u8bca\u65ad\u547d\u4ee4:\n";
+                std::cerr << "    winrm enumerate winrm/config/Listener\n";
+                std::cerr << "    certutil -store My 2c2a-h-side\n";
+                std::cerr << "    netsh advfirewall firewall show rule name=\"WinRM HTTPS\"\n";
             }
         }
     }
