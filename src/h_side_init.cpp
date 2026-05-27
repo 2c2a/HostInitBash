@@ -430,11 +430,11 @@ bool HSideInitializer::configure_winrm_cert() {
     remove_existing_certs();
     if (debug_) std::cout << "  [DEBUG] \u5df2\u6e05\u7406\u65e7\u8bc1\u4e66\n";
 
-    { HCRYPTPROV h_tmp = 0; CryptAcquireContextW(&h_tmp, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_DELETEKEYSET); }
+    { HCRYPTPROV h_tmp = 0; CryptAcquireContextW(&h_tmp, L"2c2a-winrm", MS_ENHANCED_PROV_S, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_DELETEKEYSET); }
     if (debug_) std::cout << "  [DEBUG] \u5df2\u6e05\u7406\u65e7\u5bc6\u94a5\u5bb9\u5668\n";
 
     CryptProv crypt_prov;
-    if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_NEWKEYSET)) {
+    if (!CryptAcquireContextW(&crypt_prov.handle, L"2c2a-winrm", MS_ENHANCED_PROV_S, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET | CRYPT_NEWKEYSET)) {
         DWORD err = GetLastError();
         std::cerr << "  CryptAcquireContext \u5931\u8d25: " << err << " (0x" << std::hex << err << std::dec << ")\n";
         if (err == 0x80090016) std::cerr << "  -> \u5bc6\u94a5\u5bb9\u5668\u4e0d\u5b58\u5728/\u65e0\u6743\u9650\u521b\u5efa\n";
@@ -453,7 +453,7 @@ bool HSideInitializer::configure_winrm_cert() {
 
     if (debug_) {
         HCRYPTPROV h_verify = 0;
-        if (CryptAcquireContextW(&h_verify, L"2c2a-winrm", nullptr, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET)) {
+        if (CryptAcquireContextW(&h_verify, L"2c2a-winrm", MS_ENHANCED_PROV_S, PROV_RSA_FULL, CRYPT_MACHINE_KEYSET)) {
             HCRYPTKEY h_vk = 0;
             if (CryptGetUserKey(h_verify, AT_KEYEXCHANGE, &h_vk)) {
                 std::cout << "  [DEBUG] \u9a8c\u8bc1: AT_KEYEXCHANGE \u5bc6\u94a5\u5b58\u5728\n";
@@ -480,7 +480,7 @@ bool HSideInitializer::configure_winrm_cert() {
     CRYPT_KEY_PROV_INFO kpi = {};
     std::wstring prov_name(L"2c2a-winrm");
     kpi.pwszContainerName = const_cast<LPWSTR>(prov_name.c_str());
-    kpi.pwszProvName = nullptr;
+    kpi.pwszProvName = const_cast<LPWSTR>(MS_ENHANCED_PROV_S);
     kpi.dwProvType = PROV_RSA_FULL;
     kpi.dwFlags = CRYPT_MACHINE_KEYSET;
     kpi.cProvParam = 0;
