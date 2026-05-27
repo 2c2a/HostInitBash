@@ -7,7 +7,7 @@ param(
 if ($args -contains '--debug') { $DebugMode = $true }
 
 if ($args -contains '--help' -or $args -contains '-h') {
-    Write-Host 'Usage: .\h_side_init.ps1 <secret> [--debug]'
+    Write-Host 'Usage: .\h_side_init.ps1 {secret} [--debug]'
     Write-Host '  secret   C 端获取的加密配置字符串'
     Write-Host '  --debug  输出详细调试信息'
     exit 0
@@ -15,7 +15,7 @@ if ($args -contains '--help' -or $args -contains '-h') {
 
 if (-not $Secret) {
     Write-Host '错误: 必须提供 secret 参数' -ForegroundColor Red
-    Write-Host 'Usage: .\h_side_init.ps1 <secret> [--debug]'
+    Write-Host 'Usage: .\h_side_init.ps1 {secret} [--debug]'
     exit 1
 }
 
